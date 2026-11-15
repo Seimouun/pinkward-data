@@ -2,8 +2,10 @@ name: Matches sammeln
 
 on:
   schedule:
-    # Alle 3 Stunden, 17 Minuten nach der vollen Stunde (zur vollen Stunde sind die Runner am vollsten).
-    - cron: "17 */3 * * *"
+    # GitHub lässt geplante Starts unter Last ausfallen (am 15.11. liefen von 5 Terminen nur einer, fast
+    # 2 Stunden zu spät). Darum zweimal pro Stunde anstoßen, nie zur vollen Stunde; der Job "due"
+    # entscheidet, ob wirklich gecrawlt wird. So kostet ein ausgefallener Start höchstens 30 Minuten.
+    - cron: "17,47 * * * *"
   workflow_dispatch:
     inputs:
       minutes:
@@ -20,9 +22,47 @@ permissions:
 
 env:
   RELEASE_TAG: data
+  # Pause zwischen zwei Uploads, bevor der nächste Crawl startet. Ein Crawl dauert etwa eine Stunde,
+  # zusammen also etwa alle 3 Stunden neue Daten.
+  PAUSE_MINUTES: 120
 
 jobs:
+  # Geplante Starts crawlen nur, wenn der letzte Upload alt genug ist; manuelle Starts immer.
+  # Läuft gerade ein Crawl, wartet dieser Lauf (concurrency) und sieht danach den frischen Upload.
+  due:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.check.outputs.run }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - id: check
+        run: |
+          if [ "${{ github.event_name }}" != "schedule" ]; then
+            echo "Manuell gestartet."
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          updated=$(gh api "repos/${{ github.repository }}/releases/tags/$RELEASE_TAG" \
+            --jq '.assets[] | select(.name == "matchups.json") | .updated_at' 2>/dev/null || true)
+          if [ -z "$updated" ]; then
+            echo "Noch kein Upload gefunden, Crawl startet."
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          age=$(( ($(date +%s) - $(date -d "$updated" +%s)) / 60 ))
+          if [ "$age" -ge "$PAUSE_MINUTES" ]; then
+            echo "Letzter Upload vor $age Minuten, Crawl startet."
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Letzter Upload vor $age Minuten (Pause $PAUSE_MINUTES), diesmal kein Crawl."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
   crawl:
+    needs: due
+    if: needs.due.outputs.run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 75
     env:
