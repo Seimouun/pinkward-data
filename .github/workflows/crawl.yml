@@ -1,0 +1,106 @@
+name: Matches sammeln
+
+on:
+  schedule:
+    # Alle 3 Stunden, 17 Minuten nach der vollen Stunde (zur vollen Stunde sind die Runner am vollsten).
+    - cron: "17 */3 * * *"
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: "Wie viele Minuten Matches laden"
+        default: "45"
+
+# Nie zwei Läufe gleichzeitig, sonst überschreibt einer die Datenbank des anderen.
+concurrency:
+  group: crawl
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  RELEASE_TAG: data
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RIOT_API_KEY: ${{ secrets.RIOT_API_KEY }}
+      RIOT_PLATFORM: ${{ vars.RIOT_PLATFORM || 'euw1' }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Abhängigkeiten installieren
+        run: pip install -r requirements.txt
+
+      # Die Daten liegen als Parquet-Dateien (eine je Tabelle) im Release; daraus wird die
+      # Arbeitsdatenbank gebaut. Parquet ist etwa fünfmal kleiner als eine DuckDB-Datei.
+      - name: Daten vom letzten Lauf holen
+        run: |
+          mkdir -p data/snapshot
+          if gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name' | grep -q '\.parquet$'; then
+            gh release download "$RELEASE_TAG" --pattern "*.parquet" --dir data/snapshot
+          else
+            echo "Noch keine Daten im Release, starte leer."
+            touch data/started-empty
+          fi
+          python -m leaguestats restore data/snapshot
+
+      - name: Matches laden
+        id: crawl
+        continue-on-error: true
+        run: >
+          python -m leaguestats crawl --timelines --matches 100000 --no-export
+          --max-minutes "${{ inputs.minutes || '45' }}"
+
+      - name: Aufräumen, exportieren, Snapshot schreiben
+        run: |
+          python -m leaguestats prune --keep-patches 3
+          python -m leaguestats export --out dist/matchups.json
+          python -m leaguestats snapshot dist/snapshot
+          python -m leaguestats status
+
+      - name: Daten und matchups.json hochladen
+        run: |
+          # Schutz vor Datenverlust: Wurde leer gestartet, obwohl das Release schon Daten hat
+          # (z. B. weil die Abfrage vorhin fehlschlug), nichts überschreiben.
+          if [ -f data/started-empty ] && gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name' | grep -q '\.parquet$'; then
+            echo "::error::Leer gestartet, aber im Release liegen schon Daten. Upload abgebrochen, damit nichts verloren geht."
+            exit 1
+          fi
+          # GitHub erlaubt höchstens 2 GB je Release-Datei.
+          for file in dist/snapshot/*.parquet; do
+            if [ "$(stat -c %s "$file")" -gt 1900000000 ]; then
+              echo "::error::$file ist größer als 1,9 GB. Weniger Patches behalten (prune --keep-patches)."
+              exit 1
+            fi
+          done
+          gh release view "$RELEASE_TAG" > /dev/null 2>&1 \
+            || gh release create "$RELEASE_TAG" --title "Daten" --latest \
+                 --notes "Wird automatisch vom Workflow aktualisiert: Parquet-Dateien (Rohdaten je Tabelle) und matchups.json (für die App)."
+          gh release upload "$RELEASE_TAG" dist/snapshot/*.parquet dist/matchups.json --clobber
+
+      # GitHub pausiert Zeitpläne in öffentlichen Repos nach 60 Tagen ohne Commit.
+      - name: Zeitplan wach halten
+        run: |
+          last_commit=$(git log -1 --format=%ct)
+          if [ $(( $(date +%s) - last_commit )) -gt $(( 45 * 86400 )) ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit --allow-empty -m "Zeitplan wach halten"
+            git push
+          fi
+
+      - name: Fehler beim Laden melden
+        if: steps.crawl.outcome == 'failure'
+        run: |
+          echo "::error::Das Laden der Matches ist fehlgeschlagen, z. B. wegen eines abgelaufenen API-Keys. Bisherige Daten wurden trotzdem hochgeladen."
+          exit 1
