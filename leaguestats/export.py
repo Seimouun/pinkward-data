@@ -44,7 +44,7 @@ JOIN participants b
 JOIN matches m ON m.match_id = a.match_id
 LEFT JOIN lane la ON la.match_id = a.match_id AND la.team_id = a.team_id AND la.role = a.role
 LEFT JOIN lane lb ON lb.match_id = b.match_id AND lb.team_id = b.team_id AND lb.role = b.role
-WHERE list_contains(?, m.patch) AND a.champion_id < b.champion_id
+WHERE list_contains(?, m.patch) AND m.duration_s >= ? AND a.champion_id < b.champion_id
 GROUP BY a.role, a.champion_id, b.champion_id
 HAVING count(*) >= ?
 ORDER BY 1, 2, 3
@@ -52,11 +52,14 @@ ORDER BY 1, 2, 3
 
 LANE_FIELDS = (("goldDiff10", 6), ("goldDiff15", 7), ("xpDiff15", 8), ("csDiff15", 9))
 
+# Vor Minute 15 endet ein Ranked-Spiel nur durch Remake, AFK oder vorzeitige Aufgabe.
+DEFAULT_MIN_MINUTES = 15
+
 ROLE_SQL = """
 SELECT p.champion_id, p.role, count(*)
 FROM participants p
 JOIN matches m ON m.match_id = p.match_id
-WHERE list_contains(?, m.patch)
+WHERE list_contains(?, m.patch) AND m.duration_s >= ?
 GROUP BY p.champion_id, p.role
 ORDER BY 1, 2
 """
@@ -68,14 +71,22 @@ def latest_patches(store: Store, count: int) -> list[str]:
 
 
 def build_export(
-    store: Store, *, patches: int = 2, min_games: int = 20, now: datetime | None = None
+    store: Store,
+    *,
+    patches: int = 2,
+    min_games: int = 20,
+    min_minutes: int = DEFAULT_MIN_MINUTES,
+    now: datetime | None = None,
 ) -> dict[str, Any]:
+    """`min_minutes`: kürzere Spiele (Abbrüche, AFK, Aufgaben vor Minute 15) zählen nicht mit.
+    Gespeichert bleiben sie trotzdem; der Filter greift nur hier."""
     selected = latest_patches(store, patches)
     data: dict[str, Any] = {
         "patches": selected,
         "generatedAt": (now or datetime.now(timezone.utc)).isoformat(timespec="seconds"),
         "matches": 0,
         "minGames": min_games,
+        "minMinutes": min_minutes,
         "matchups": {},
         "roles": {},
     }
@@ -83,11 +94,12 @@ def build_export(
         return data
 
     con = store.con
+    min_duration_s = min_minutes * 60
     data["matches"] = con.execute(
-        "SELECT count(*) FROM matches WHERE list_contains(?, patch)", [selected]
+        "SELECT count(*) FROM matches WHERE list_contains(?, patch) AND duration_s >= ?", [selected, min_duration_s]
     ).fetchone()[0]
 
-    for row in con.execute(MATCHUP_SQL, [selected, min_games]).fetchall():
+    for row in con.execute(MATCHUP_SQL, [selected, min_duration_s, min_games]).fetchall():
         role, a, b, games, wins, timeline_games = row[:6]
         record: dict[str, int] = {"games": int(games), "wins": int(wins)}
         if timeline_games >= min_games:
@@ -96,7 +108,7 @@ def build_export(
                     record[name] = round(row[index])
         data["matchups"][f"{role}:{a}:{b}"] = record
 
-    for champion_id, role, games in con.execute(ROLE_SQL, [selected]).fetchall():
+    for champion_id, role, games in con.execute(ROLE_SQL, [selected, min_duration_s]).fetchall():
         data["roles"].setdefault(str(champion_id), {})[role] = int(games)
 
     return data

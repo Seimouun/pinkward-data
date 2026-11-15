@@ -93,6 +93,16 @@ def test_prune_keeps_only_the_newest_patches(store):
     assert store.prune(keep_patches=2) == []
 
 
+def test_ignores_games_shorter_than_15_minutes(store):
+    save(store, make_match("KURZ", blue=(GAREN, 2, 3, 4, 5), red=(DARIUS, 7, 8, 9, 10), duration=6 * 60))
+    save(store, make_match("NORMAL", blue=(GAREN, 2, 3, 4, 5), red=(DARIUS, 7, 8, 9, 10), duration=15 * 60))
+    data = build_export(store, min_games=1)
+    assert data["matches"] == 1 and data["minMinutes"] == 15
+    assert data["matchups"]["top:86:122"]["games"] == 1
+    assert data["roles"]["86"] == {"top": 1}
+    assert build_export(store, min_games=1, min_minutes=5)["matches"] == 2
+
+
 def test_empty_database_exports_empty_tables(store):
     data = build_export(store)
     assert data["patches"] == [] and data["matchups"] == {} and data["matches"] == 0

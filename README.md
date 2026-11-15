@@ -33,12 +33,13 @@ Platzbedarf: etwa 2,5 KB je Match als Parquet; bei drei behaltenen Patches (rund
   "generatedAt": "2026-11-15T12:00:00+00:00",
   "matches": 12345,
   "minGames": 20,
+  "minMinutes": 15,
   "matchups": { "top:86:122": { "games": 80, "wins": 47, "goldDiff10": 85, "goldDiff15": 143, "xpDiff15": 60, "csDiff15": 4 } },
   "roles": { "86": { "top": 1200, "middle": 12 } }
 }
 ```
 
-Schlüssel `rolle:a:b` mit Champion-ID `a < b`; Siege und Differenzen aus Sicht von `a`. Die Lane-Differenzen erscheinen nur, wenn genug Spiele des Matchups eine Timeline haben.
+Spiele unter 15 Minuten (Remakes, AFK, vorzeitige Aufgabe) zählen im Export nicht mit; gespeichert bleiben sie. Schlüssel `rolle:a:b` mit Champion-ID `a < b`; Siege und Differenzen aus Sicht von `a`. Die Lane-Differenzen erscheinen nur, wenn genug Spiele des Matchups eine Timeline haben.
 
 ## Einrichten
 

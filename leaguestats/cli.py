@@ -8,7 +8,7 @@ from pathlib import Path
 
 from .config import DEFAULT_DB, DEFAULT_EXPORT, load_settings
 from .crawl import crawl, parse_tiers
-from .export import build_export, write_export
+from .export import DEFAULT_MIN_MINUTES, build_export, write_export
 from .riot_api import RiotApi, RiotApiError
 from .store import Store
 
@@ -51,6 +51,12 @@ def main(argv: list[str] | None = None) -> int:
     export_cmd = commands.add_parser("export", help="Matchups für die App nach app/src/data/matchups.json schreiben")
     export_cmd.add_argument("--patches", type=int, default=2, help="die neuesten N Patches einbeziehen (Standard: 2)")
     export_cmd.add_argument("--min-games", type=int, default=20, help="Matchups mit weniger Spielen weglassen (Standard: 20)")
+    export_cmd.add_argument(
+        "--min-minutes",
+        type=int,
+        default=DEFAULT_MIN_MINUTES,
+        help=f"kürzere Spiele nicht mitzählen (Standard: {DEFAULT_MIN_MINUTES})",
+    )
     export_cmd.add_argument("--out", type=Path, default=DEFAULT_EXPORT)
 
     commands.add_parser("status", help="zeigen, was in der Datenbank liegt")
@@ -161,8 +167,10 @@ def run_crawl(args: argparse.Namespace) -> int:
     return exit_code
 
 
-def export_to_app(store: Store, out: Path, *, patches: int = 2, min_games: int = 20) -> bool:
-    data = build_export(store, patches=patches, min_games=min_games)
+def export_to_app(
+    store: Store, out: Path, *, patches: int = 2, min_games: int = 20, min_minutes: int = DEFAULT_MIN_MINUTES
+) -> bool:
+    data = build_export(store, patches=patches, min_games=min_games, min_minutes=min_minutes)
     if not data["patches"]:
         print("Keine Matches in der Datenbank. Erst  python -m leaguestats crawl  ausführen.")
         return False
@@ -177,7 +185,9 @@ def export_to_app(store: Store, out: Path, *, patches: int = 2, min_games: int =
 def run_export(args: argparse.Namespace) -> int:
     store = Store(args.db)
     try:
-        ok = export_to_app(store, args.out, patches=args.patches, min_games=args.min_games)
+        ok = export_to_app(
+            store, args.out, patches=args.patches, min_games=args.min_games, min_minutes=args.min_minutes
+        )
     finally:
         store.close()
     return 0 if ok else 1
