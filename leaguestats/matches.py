@@ -14,9 +14,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Mapping, NamedTuple
 
-PARSER_VERSION = 2
+# 2: Loadout, Leistungswerte, Schnappschüsse, Ereignisse. 3: Rang/LP je Spieler, Kayns Form.
+PARSER_VERSION = 3
 
 ROLES = ("top", "jungle", "middle", "bottom", "utility")
 MIN_DURATION_S = 300
@@ -99,11 +100,25 @@ PARTICIPANT_COLUMNS: dict[str, str] = {
     "items": "INTEGER[]",
     "first_blood": "BOOLEAN",
     "first_tower": "BOOLEAN",
+    # Aus der beim Crawl geladenen Rangliste; NULL, wenn der Spieler nicht darin steht. Riot liefert
+    # höchstens 10.000 Master-Spieler (die mit den meisten LP); NULL heißt also: Master mit wenig LP
+    # oder darunter (Diamond).
+    "ladder_tier": "VARCHAR",
+    "league_points": "INTEGER",
+    # Kayn: 0 = Grundform, 1 = Rhaast, 2 = Schattenassassine; sonst 0.
+    "champion_form": "INTEGER",
     **{
         name: ("DOUBLE" if path.startswith("challenges.") else "INTEGER")
         for name, path in PARTICIPANT_STATS.items()
     },
 }
+
+
+class LadderEntry(NamedTuple):
+    """Platz in der Rangliste, z. B. ("CHALLENGER", 1234) oder ("DIAMOND I", 75)."""
+
+    tier: str
+    league_points: int | None
 
 
 class SkipMatch(Exception):
@@ -142,8 +157,13 @@ def number_at(obj: Any, path: str) -> int | float | None:
 
 
 def parse_match(
-    match: dict[str, Any], timeline: dict | None = None, *, seed_tier: str | None = None
+    match: dict[str, Any],
+    timeline: dict | None = None,
+    *,
+    seed_tier: str | None = None,
+    ladder: Mapping[str, LadderEntry] | None = None,
 ) -> ParsedMatch:
+    """`ladder`: PUUID → Ranglistenplatz; die PUUID dient nur zum Nachschlagen und wird nie gespeichert."""
     match_id = match["metadata"]["matchId"]
     info = match["info"]
     participants = info.get("participants", [])
@@ -167,7 +187,7 @@ def parse_match(
     frames = timeline_frames(timeline)
     gold_15 = {seat: row["total_gold"] for seat, row in _frame_rows(frames, seats, [15])}
 
-    participant_rows = [_participant_row(match_id, p, gold_15) for p in participants]
+    participant_rows = [_participant_row(match_id, p, gold_15, ladder or {}) for p in participants]
 
     start_ms = info.get("gameStartTimestamp")
     match_row = {
@@ -203,8 +223,9 @@ def timeline_frames(timeline: dict | None) -> list[dict]:
     return timeline.get("info", {}).get("frames", []) or []
 
 
-def _participant_row(match_id: str, p: dict, gold_15: dict) -> dict[str, Any]:
+def _participant_row(match_id: str, p: dict, gold_15: dict, ladder: Mapping[str, LadderEntry]) -> dict[str, Any]:
     team, role = int(p["teamId"]), str(p["teamPosition"]).lower()
+    rank = ladder.get(p.get("puuid") or "")
     perks = p.get("perks") or {}
     styles = {style.get("description"): style for style in perks.get("styles", [])}
     primary, sub = styles.get("primaryStyle", {}), styles.get("subStyle", {})
@@ -231,6 +252,9 @@ def _participant_row(match_id: str, p: dict, gold_15: dict) -> dict[str, Any]:
         "items": [int(p.get(f"item{i}", 0) or 0) for i in range(7)],
         "first_blood": bool(p.get("firstBloodKill") or p.get("firstBloodAssist")),
         "first_tower": bool(p.get("firstTowerKill") or p.get("firstTowerAssist")),
+        "ladder_tier": rank.tier if rank else None,
+        "league_points": rank.league_points if rank else None,
+        "champion_form": p.get("championTransform"),
     }
     for name, path in PARTICIPANT_STATS.items():
         row[name] = number_at(p, path)

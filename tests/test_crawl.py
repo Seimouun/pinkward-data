@@ -18,7 +18,10 @@ class FakeApi:
         self.timeline_calls: list[str] = []
 
     def apex_league(self, tier):
-        return {"entries": [{"puuid": "p1"}, {"puuid": "p2"}]} if tier == "CHALLENGER" else None
+        if tier != "CHALLENGER":
+            return None
+        # "puuid-0" ist Blau-Top in jedem Test-Match (siehe factories.make_match).
+        return {"entries": [{"puuid": "p1", "leaguePoints": 900}, {"puuid": "p2"}, {"puuid": "puuid-0", "leaguePoints": 1234}]}
 
     def league_entries(self, tier, division, page):
         return [{"puuid": f"{tier}-{division}"}] if page == 1 else []
@@ -85,8 +88,19 @@ def test_loads_timelines_only_when_requested(store):
 
 def test_seeds_divisions_for_non_apex_tiers():
     players = seed_players(FakeApi(), ["CHALLENGER", "DIAMOND"])
-    assert list(players) == ["p1", "p2", "DIAMOND-I", "DIAMOND-II", "DIAMOND-III", "DIAMOND-IV"]
-    assert players["p1"] == "CHALLENGER" and players["DIAMOND-II"] == "DIAMOND"
+    assert list(players) == ["p1", "p2", "puuid-0", "DIAMOND-I", "DIAMOND-II", "DIAMOND-III", "DIAMOND-IV"]
+    assert players["p1"] == ("CHALLENGER", 900)
+    assert players["DIAMOND-II"].tier == "DIAMOND II"
+
+
+def test_tags_participants_found_in_the_ladder(store):
+    run(FakeApi(), store)
+    tagged = store.con.execute(
+        "SELECT DISTINCT team_id, role, ladder_tier, league_points FROM participants WHERE ladder_tier IS NOT NULL"
+    ).fetchall()
+    assert tagged == [(100, "top", "CHALLENGER", 1234)]
+    untagged = store.con.execute("SELECT count(*) FROM participants WHERE ladder_tier IS NULL").fetchone()[0]
+    assert untagged == 3 * 9
 
 
 def test_records_the_tier_a_match_was_found_in(store):

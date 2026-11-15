@@ -14,7 +14,7 @@ Bewusst breit, damit spätere Auswertungen nicht an fehlenden Daten scheitern, a
 | Tabelle | Inhalt |
 |---|---|
 | `matches` | Patch, Server, Dauer, Startzeit, Aufgabe/Surrender, Tier, in dem das Match gefunden wurde, Parser-Version |
-| `participants` | Champion, Rolle, Sieg; Rollenvergabe (Wunschrolle/Autofill); Summoner Spells, Runen, Items; KDA, Gold, CS, Schaden nach Art, Tanken, Heilung/Schilde, CC, Vision, Türme; Riots Lane-Kennzahlen (Gold/XP-Vorsprung in der Lane-Phase, max. CS- und Level-Vorsprung, Solo-Kills, Platings, CS nach 10 Minuten) |
+| `participants` | Champion (bei Kayn mit Form), Rolle, Sieg; Rollenvergabe (Wunschrolle/Autofill); Tier und LP aus der Rangliste (leer bei Master mit wenig LP oder darunter); Summoner Spells, Runen, Items; KDA, Gold, CS, Schaden nach Art, Tanken, Heilung/Schilde, CC, Vision, Türme; Riots Lane-Kennzahlen (Gold/XP-Vorsprung in der Lane-Phase, max. CS- und Level-Vorsprung, Solo-Kills, Platings, CS nach 10 Minuten) |
 | `participant_frames` | Gold, XP, Level, CS, Schaden ausgeteilt/erhalten zu Minute 5, 10, 15, 20, 25, 30 |
 | `kills` | alle Kills der ersten 20 Minuten: Zeit, Killer, Opfer, Assists (je Team und Rolle), Position, Bounty |
 | `objective_events` | Drachen (mit Element), Grubs, Herald, Baron, weitere Monster, Türme, Inhibitoren, Platings: Zeit, Team, Lane |

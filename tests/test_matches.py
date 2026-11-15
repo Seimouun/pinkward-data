@@ -1,7 +1,7 @@
 import pytest
 from factories import kill, make_full_timeline, make_match, make_timeline
 
-from leaguestats.matches import PARSER_VERSION, PARTICIPANT_COLUMNS, SkipMatch, parse_match, patch_of
+from leaguestats.matches import PARSER_VERSION, PARTICIPANT_COLUMNS, LadderEntry, SkipMatch, parse_match, patch_of
 
 
 def test_parses_patch_roles_and_results():
@@ -41,6 +41,20 @@ def test_reads_loadout_and_role_assignment():
     assert p["assigned_role"] == "top"
     assert p["role_preferences"] == "TOP.PRIMARY.TOP.MIDDLE"
     assert p["first_blood"] is True
+
+
+def test_tags_ladder_rank_without_storing_the_puuid():
+    ladder = {"puuid-0": LadderEntry("CHALLENGER", 1234), "puuid-7": LadderEntry("MASTER", 12)}
+    parsed = parse_match(make_match(), ladder=ladder)
+    ranks = [(p["team_id"], p["role"], p["ladder_tier"], p["league_points"]) for p in parsed.participants if p["ladder_tier"]]
+    assert ranks == [(100, "top", "CHALLENGER", 1234), (200, "middle", "MASTER", 12)]
+    assert "puuid" not in repr(parsed.participants)
+
+
+def test_reads_kayn_form():
+    match = make_match(blue=(141, 2, 3, 4, 5))
+    match["info"]["participants"][0]["championTransform"] = 1
+    assert parse_match(match).participants[0]["champion_form"] == 1
 
 
 def test_reads_stats_and_riot_lane_metrics():

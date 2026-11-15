@@ -12,7 +12,7 @@ import time
 from dataclasses import dataclass
 from typing import Callable, Protocol
 
-from .matches import SkipMatch, parse_match
+from .matches import LadderEntry, SkipMatch, parse_match
 from .riot_api import APEX_LEAGUES
 from .store import Store
 
@@ -44,24 +44,29 @@ def parse_tiers(value: str) -> list[str]:
     return tiers
 
 
-def seed_players(api: Api, tiers: list[str], pages_per_division: int = 2) -> dict[str, str]:
-    """PUUID → Tier, in dem der Spieler gefunden wurde (Reihenfolge wie geladen)."""
-    players: dict[str, str] = {}
+def seed_players(api: Api, tiers: list[str], pages_per_division: int = 2) -> dict[str, LadderEntry]:
+    """PUUID → Platz in der Rangliste (Reihenfolge wie geladen).
+
+    Dient zweimal: als Startpunkte für den Crawl und, um Spielern in gefundenen Matches ihr Tier und
+    ihre LP zuzuordnen, ohne zusätzliche Anfrage. Die PUUIDs bleiben dabei nur im Arbeitsspeicher.
+    """
+    players: dict[str, LadderEntry] = {}
     for tier in tiers:
         if tier in APEX_LEAGUES:
             league = api.apex_league(tier) or {}
-            entries = league.get("entries", [])
+            entries = [{**entry, "tier": tier, "rank": None} for entry in league.get("entries", [])]
         else:
             entries = []
             for division in DIVISIONS:
                 for page in range(1, pages_per_division + 1):
                     batch = api.league_entries(tier, division, page) or []
-                    entries.extend(batch)
+                    entries.extend({**entry, "tier": tier, "rank": entry.get("rank", division)} for entry in batch)
                     if not batch:
                         break
         for entry in entries:
             if entry.get("puuid"):
-                players.setdefault(entry["puuid"], tier)
+                label = entry["tier"] if entry["rank"] is None else f"{entry['tier']} {entry['rank']}"
+                players.setdefault(entry["puuid"], LadderEntry(tier=label, league_points=entry.get("leaguePoints")))
     return players
 
 
@@ -81,8 +86,8 @@ def crawl(
     should_stop: Callable[[], bool] = lambda: False,
 ) -> CrawlResult:
     result = CrawlResult()
-    tier_of = seed_players(api, tiers)
-    players = list(tier_of)
+    ladder = seed_players(api, tiers)
+    players = list(ladder)
     (rng or random.Random()).shuffle(players)
     result.players = len(players)
     log(f"{len(players)} Spieler aus {', '.join(t.lower() for t in tiers)} gefunden.")
@@ -108,7 +113,10 @@ def crawl(
                 continue
             try:
                 parsed = parse_match(
-                    match, api.timeline(match_id) if timelines else None, seed_tier=tier_of[puuid]
+                    match,
+                    api.timeline(match_id) if timelines else None,
+                    seed_tier=ladder[puuid].tier,
+                    ladder=ladder,
                 )
             except SkipMatch as skip:
                 store.save_skipped(match_id, skip.reason)

@@ -147,8 +147,15 @@ def _v2(con: duckdb.DuckDBPyConnection) -> None:
     )
 
 
+def _v3(con: duckdb.DuckDBPyConnection) -> None:
+    """Rang und LP je Spieler aus der Rangliste, Kayns Form."""
+    for column, sql_type in {"ladder_tier": "VARCHAR", "league_points": "INTEGER", "champion_form": "INTEGER"}.items():
+        con.execute(f"ALTER TABLE participants ADD COLUMN IF NOT EXISTS {column} {sql_type}")
+
+
 # Reihenfolge ist verbindlich; neue Migrationen nur hinten anhängen, bestehende nie ändern.
-MIGRATIONS: list[Callable[[duckdb.DuckDBPyConnection], None]] = [_v1, _v2]
+# Migrationen müssen additiv bleiben (siehe Store.restore).
+MIGRATIONS: list[Callable[[duckdb.DuckDBPyConnection], None]] = [_v1, _v2, _v3]
 SCHEMA_VERSION = len(MIGRATIONS)
 
 
