@@ -148,3 +148,7 @@ def kill(at_s: int, killer: int, victim: int, assists: tuple[int, ...] = ()) -> 
         "bounty": 300,
         "shutdownBounty": 0,
     }
+
+
+def buy(at_s: int, participant: int, item: int) -> dict:
+    return {"type": "ITEM_PURCHASED", "timestamp": at_s * 1000, "participantId": participant, "itemId": item}

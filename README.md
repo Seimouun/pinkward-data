@@ -40,13 +40,16 @@ Platzbedarf: etwa 2,5 KB je Match als Parquet; bei drei behaltenen Patches (rund
   "builds": {
     "top:86": {
       "runes": { "primaryStyle": 8000, "subStyle": 8400, "perks": [8010, 9111, 9104, 8299, 8242, 8444], "statPerks": [5005, 5008, 5001], "games": 310, "wins": 162 },
-      "spells": { "ids": [4, 12], "games": 900, "wins": 470 }
+      "spells": { "ids": [4, 12], "games": 900, "wins": 470 },
+      "items": [[3078, 850, 450, 14.2], [3047, 700, 370, 9.8]],
+      "starters": { "ids": [1055, 2003], "games": 640, "wins": 330 }
     }
-  }
+  },
+  "matchupItems": { "top:86:122": [[3071, 60, 33], [3047, 55, 30]] }
 }
 ```
 
-Spiele unter 15 Minuten (Remakes, AFK, vorzeitige Aufgabe) zählen im Export nicht mit; gespeichert bleiben sie. Schlüssel `rolle:a:b` mit Champion-ID `a < b`; Siege und Differenzen aus Sicht von `a`. Die Lane-Differenzen erscheinen nur, wenn genug Spiele des Matchups eine Timeline haben. `builds` enthält je Champion und Rolle die häufigste Runenseite (Nebenrunen sortiert, Werte-Runen getrennt gezählt) und das häufigste Spell-Paar (ohne Reihenfolge), jeweils ab `minGames` Spielen.
+Spiele unter 15 Minuten (Remakes, AFK, vorzeitige Aufgabe) zählen im Export nicht mit; gespeichert bleiben sie. Schlüssel `rolle:a:b` mit Champion-ID `a < b`; Siege und Differenzen aus Sicht von `a`. Die Lane-Differenzen erscheinen nur, wenn genug Spiele des Matchups eine Timeline haben. `builds` enthält je Champion und Rolle die häufigste Runenseite (Nebenrunen sortiert, Werte-Runen getrennt gezählt) und das häufigste Spell-Paar (ohne Reihenfolge), jeweils ab `minGames` Spielen. `items` sind die häufigsten Items im End-Inventar als `[itemId, Spiele, Siege, Kaufminute]`; die mittlere Minute des ersten Kaufs und die Start-Items (`starters`, alles aus den ersten 90 Sekunden) gibt es nur für Matches mit Kauf-Daten (ab Parser-Version 4). `matchupItems` zeigt dasselbe gegen einen bestimmten Lane-Gegner (`rolle:champion:gegner`, beide Richtungen).
 
 ## Einrichten
 

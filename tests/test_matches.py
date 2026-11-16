@@ -1,5 +1,5 @@
 import pytest
-from factories import kill, make_full_timeline, make_match, make_timeline
+from factories import buy, kill, make_full_timeline, make_match, make_timeline
 
 from leaguestats.matches import PARSER_VERSION, PARTICIPANT_COLUMNS, LadderEntry, SkipMatch, parse_match, patch_of
 
@@ -138,3 +138,21 @@ def test_skips_unusable_matches(match, reason):
 
 def test_patch_strips_build_numbers():
     assert patch_of("16.9.123.4") == "16.9"
+
+
+def test_records_item_purchases_in_order_without_undone_ones():
+    events = [
+        buy(5, 1, 1055),
+        buy(6, 1, 2003),
+        buy(400, 1, 1036),
+        # Kauf rückgängig gemacht: zählt nicht
+        {"type": "ITEM_UNDO", "timestamp": 402000, "participantId": 1, "beforeId": 1036, "afterId": 0},
+        buy(900, 1, 3031),
+        buy(10, 6, 1054),
+    ]
+    rows = parse_match(make_match(), make_full_timeline(events=events)).item_purchases
+    top_blue = [(r["seq"], r["at_s"], r["item_id"]) for r in rows if r["team_id"] == 100 and r["role"] == "top"]
+    assert top_blue == [(0, 5, 1055), (1, 6, 2003), (2, 900, 3031)]
+    assert [r["item_id"] for r in rows if r["team_id"] == 200] == [1054]
+    assert parse_match(make_match()).item_purchases == []
+

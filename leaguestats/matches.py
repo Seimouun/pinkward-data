@@ -17,7 +17,8 @@ from datetime import datetime, timezone
 from typing import Any, Mapping, NamedTuple
 
 # 2: Loadout, Leistungswerte, Schnappschüsse, Ereignisse. 3: Rang/LP je Spieler, Kayns Form.
-PARSER_VERSION = 3
+# 4: Item-Käufe aus der Timeline (Start-Items, Reihenfolge).
+PARSER_VERSION = 4
 
 ROLES = ("top", "jungle", "middle", "bottom", "utility")
 MIN_DURATION_S = 300
@@ -136,6 +137,7 @@ class ParsedMatch:
     objective_events: list[dict[str, Any]] = field(default_factory=list)
     team_objectives: list[dict[str, Any]] = field(default_factory=list)
     bans: list[dict[str, Any]] = field(default_factory=list)
+    item_purchases: list[dict[str, Any]] = field(default_factory=list)
 
 
 def patch_of(game_version: str) -> str:
@@ -214,6 +216,7 @@ def parse_match(
             for (team, role), row in _frame_rows(frames, seats, FRAME_MINUTES, with_minute=True)
         ]
         parsed.kills, parsed.objective_events = _events(match_id, frames, seats)
+        parsed.item_purchases = _item_purchases(match_id, frames, seats)
     return parsed
 
 
@@ -348,6 +351,32 @@ def _events(match_id: str, frames: list[dict], seats: dict[int, tuple[int, str]]
                     }
                 )
     return kills, objectives
+
+
+def _item_purchases(match_id: str, frames: list[dict], seats: dict[int, tuple[int, str]]) -> list[dict[str, Any]]:
+    """Item-Käufe je Spieler in Reihenfolge. Rückgängig gemachte Käufe (ITEM_UNDO mit beforeId) fallen
+    wieder heraus; Verkäufe bleiben als Kauf stehen, weil sie für Start-Items und Reihenfolge nichts ändern."""
+    bought: dict[int, list[dict[str, Any]]] = {pid: [] for pid in seats}
+    for frame in frames:
+        for event in frame.get("events") or []:
+            kind = event.get("type")
+            pid = int(event.get("participantId") or 0)
+            if pid not in bought:
+                continue
+            if kind == "ITEM_PURCHASED" and event.get("itemId"):
+                bought[pid].append({"at_s": int(event.get("timestamp", 0)) // 1000, "item_id": int(event["itemId"])})
+            elif kind == "ITEM_UNDO" and event.get("beforeId"):
+                undone = int(event["beforeId"])
+                for index in range(len(bought[pid]) - 1, -1, -1):
+                    if bought[pid][index]["item_id"] == undone:
+                        del bought[pid][index]
+                        break
+    rows = []
+    for pid, purchases in bought.items():
+        team_id, role = seats[pid]
+        for seq, purchase in enumerate(purchases):
+            rows.append({"match_id": match_id, "team_id": team_id, "role": role, "seq": seq, **purchase})
+    return rows
 
 
 def _team_rows(match_id: str, teams: list[dict]):

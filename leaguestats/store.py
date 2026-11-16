@@ -17,7 +17,15 @@ import duckdb
 from .matches import PARTICIPANT_COLUMNS, ParsedMatch
 
 # Tabellen, die je Match Zeilen haben und beim Aufräumen mitgelöscht werden.
-MATCH_TABLES = ("participants", "participant_frames", "kills", "objective_events", "team_objectives", "bans")
+MATCH_TABLES = (
+    "participants",
+    "participant_frames",
+    "kills",
+    "objective_events",
+    "team_objectives",
+    "bans",
+    "item_purchases",
+)
 
 
 def _v1(con: duckdb.DuckDBPyConnection) -> None:
@@ -153,9 +161,26 @@ def _v3(con: duckdb.DuckDBPyConnection) -> None:
         con.execute(f"ALTER TABLE participants ADD COLUMN IF NOT EXISTS {column} {sql_type}")
 
 
+def _v4(con: duckdb.DuckDBPyConnection) -> None:
+    """Item-Käufe aus der Timeline: Start-Items und Kaufreihenfolge je Spieler (seq zählt ab 0)."""
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS item_purchases (
+            match_id VARCHAR NOT NULL,
+            team_id  INTEGER NOT NULL,
+            role     VARCHAR NOT NULL,
+            seq      INTEGER NOT NULL,
+            at_s     INTEGER NOT NULL,
+            item_id  INTEGER NOT NULL,
+            PRIMARY KEY (match_id, team_id, role, seq)
+        )
+        """
+    )
+
+
 # Reihenfolge ist verbindlich; neue Migrationen nur hinten anhängen, bestehende nie ändern.
 # Migrationen müssen additiv bleiben (siehe Store.restore).
-MIGRATIONS: list[Callable[[duckdb.DuckDBPyConnection], None]] = [_v1, _v2, _v3]
+MIGRATIONS: list[Callable[[duckdb.DuckDBPyConnection], None]] = [_v1, _v2, _v3, _v4]
 SCHEMA_VERSION = len(MIGRATIONS)
 
 
@@ -218,6 +243,7 @@ class Store:
             self._insert("objective_events", parsed.objective_events)
             self._insert("team_objectives", parsed.team_objectives)
             self._insert("bans", parsed.bans)
+            self._insert("item_purchases", parsed.item_purchases)
         return True
 
     def save_skipped(self, match_id: str, reason: str) -> None:

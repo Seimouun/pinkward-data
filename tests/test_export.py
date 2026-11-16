@@ -1,7 +1,7 @@
 import json
 from datetime import datetime, timezone
 
-from factories import make_full_timeline, make_match, make_timeline
+from factories import buy, make_full_timeline, make_match, make_timeline
 
 from leaguestats.export import build_export, latest_patches, write_export
 from leaguestats.matches import parse_match
@@ -73,6 +73,31 @@ def test_exports_the_most_common_runes_and_spells(store):
     }
     assert build["spells"] == {"ids": [4, 12], "games": 2, "wins": 1}
     assert "top:86" not in build_export(store, min_games=3)["builds"]
+
+
+def test_exports_items_with_first_buy_minute_and_starters(store):
+    # Garen (participantId 1) kauft Doran's Blade und Trank zum Start, dann 3001 nach 10 Minuten.
+    events = [buy(10, 1, 1055), buy(11, 1, 2003), buy(600, 1, 3001)]
+    for index in range(2):
+        save(store, make_match(f"I{index}", blue=(GAREN, 2, 3, 4, 5), red=(DARIUS, 7, 8, 9, 10)), make_full_timeline(events=events))
+    data = build_export(store, min_games=2)
+    build = data["builds"]["top:86"]
+    # End-Inventar aus factories.make_match: 3000–3005 (Trinket 3340 zählt nicht)
+    items = {entry[0]: entry for entry in build["items"]}
+    assert set(items) == {3000, 3001, 3002, 3003, 3004, 3005}
+    assert items[3001] == [3001, 2, 2, 10.0]
+    assert items[3000] == [3000, 2, 2]  # nie gekauft laut Timeline: keine Kaufminute
+    assert build["starters"] == {"ids": [1055, 2003], "games": 2, "wins": 2}
+    assert data["matchupItems"]["top:86:122"][0][1:] == [2, 2]
+    assert data["matchupItems"]["top:122:86"][0][1:] == [2, 0]
+    assert "top:86:122" not in build_export(store, min_games=3)["matchupItems"]
+
+
+def test_items_work_without_purchase_data(store):
+    garen_vs_darius(store, [(True, True), (True, False)])
+    build = build_export(store, min_games=2)["builds"]["top:86"]
+    assert all(len(entry) == 3 for entry in build["items"])
+    assert "starters" not in build
 
 
 def test_gold_difference_is_from_the_lower_champion_id(store):
