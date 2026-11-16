@@ -51,6 +51,30 @@ def test_counts_games_per_role(store):
     assert roles["2"] == {"jungle": 2}
 
 
+def test_counts_wins_per_role(store):
+    garen_vs_darius(store, [(True, True), (True, False), (False, True)])
+    data = build_export(store, min_games=1)
+    assert data["roles"]["86"] == {"top": 3}
+    assert data["roleWins"]["86"] == {"top": 2}
+    assert data["roleWins"]["122"] == {"top": 1}
+
+
+def test_exports_the_most_common_runes_and_spells(store):
+    garen_vs_darius(store, [(True, True), (True, False)])
+    build = build_export(store, min_games=2)["builds"]["top:86"]
+    # Nebenrunen sortiert, Werte getrennt gezählt, Spells ohne Reihenfolge (siehe factories.make_match)
+    assert build["runes"] == {
+        "primaryStyle": 8000,
+        "subStyle": 8400,
+        "perks": [8010, 9111, 9104, 8299, 8242, 8444],
+        "statPerks": [5005, 5008, 5001],
+        "games": 2,
+        "wins": 1,
+    }
+    assert build["spells"] == {"ids": [4, 12], "games": 2, "wins": 1}
+    assert "top:86" not in build_export(store, min_games=3)["builds"]
+
+
 def test_gold_difference_is_from_the_lower_champion_id(store):
     # Darius (Blau, participantId 1) hat 800 Gold mehr als Garen (Rot, participantId 6).
     save(

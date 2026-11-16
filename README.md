@@ -35,11 +35,18 @@ Platzbedarf: etwa 2,5 KB je Match als Parquet; bei drei behaltenen Patches (rund
   "minGames": 20,
   "minMinutes": 15,
   "matchups": { "top:86:122": { "games": 80, "wins": 47, "goldDiff10": 85, "goldDiff15": 143, "xpDiff15": 60, "csDiff15": 4 } },
-  "roles": { "86": { "top": 1200, "middle": 12 } }
+  "roles": { "86": { "top": 1200, "middle": 12 } },
+  "roleWins": { "86": { "top": 618, "middle": 5 } },
+  "builds": {
+    "top:86": {
+      "runes": { "primaryStyle": 8000, "subStyle": 8400, "perks": [8010, 9111, 9104, 8299, 8242, 8444], "statPerks": [5005, 5008, 5001], "games": 310, "wins": 162 },
+      "spells": { "ids": [4, 12], "games": 900, "wins": 470 }
+    }
+  }
 }
 ```
 
-Spiele unter 15 Minuten (Remakes, AFK, vorzeitige Aufgabe) zählen im Export nicht mit; gespeichert bleiben sie. Schlüssel `rolle:a:b` mit Champion-ID `a < b`; Siege und Differenzen aus Sicht von `a`. Die Lane-Differenzen erscheinen nur, wenn genug Spiele des Matchups eine Timeline haben.
+Spiele unter 15 Minuten (Remakes, AFK, vorzeitige Aufgabe) zählen im Export nicht mit; gespeichert bleiben sie. Schlüssel `rolle:a:b` mit Champion-ID `a < b`; Siege und Differenzen aus Sicht von `a`. Die Lane-Differenzen erscheinen nur, wenn genug Spiele des Matchups eine Timeline haben. `builds` enthält je Champion und Rolle die häufigste Runenseite (Nebenrunen sortiert, Werte-Runen getrennt gezählt) und das häufigste Spell-Paar (ohne Reihenfolge), jeweils ab `minGames` Spielen.
 
 ## Einrichten
 

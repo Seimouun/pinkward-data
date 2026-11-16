@@ -4,6 +4,11 @@ Format (gelesen von app/src/analysis/matchups.ts):
   matchups["<rolle>:<a>:<b>"] = {games, wins[, goldDiff10, goldDiff15, xpDiff15, csDiff15]}
                                 mit a < b; Siege und Differenzen aus Sicht von a
   roles["<championId>"]       = {<rolle>: Spiele}
+  roleWins["<championId>"]    = {<rolle>: Siege}
+  builds["<rolle>:<championId>"] = {
+      runes:  {primaryStyle, subStyle, perks: [4 Haupt-, 2 Nebenrunen], statPerks: [3], games, wins},
+      spells: {ids: [a, b], games, wins}
+  }                             häufigste Runenseite bzw. Spell-Kombination, ab `min_games` Spielen
 
 Die Lane-Differenzen stammen aus den Timeline-Schnappschüssen und erscheinen nur, wenn mindestens
 `min_games` Spiele des Matchups eine Timeline haben.
@@ -56,12 +61,64 @@ LANE_FIELDS = (("goldDiff10", 6), ("goldDiff15", 7), ("xpDiff15", 8), ("csDiff15
 DEFAULT_MIN_MINUTES = 15
 
 ROLE_SQL = """
-SELECT p.champion_id, p.role, count(*)
+SELECT p.champion_id, p.role, count(*), sum(CASE WHEN p.win THEN 1 ELSE 0 END)
 FROM participants p
 JOIN matches m ON m.match_id = p.match_id
 WHERE list_contains(?, m.patch) AND m.duration_s >= ?
 GROUP BY p.champion_id, p.role
 ORDER BY 1, 2
+"""
+
+# Häufigste Runenseite je Champion und Rolle. Die zwei Nebenrunen sind sortiert, weil Riot sie in der
+# gewählten Reihenfolge liefert; die Werte-Runen (Shards) zählen getrennt, sonst zerfällt die Seite in
+# zu viele Varianten.
+RUNES_SQL = """
+WITH pages AS (
+    SELECT p.champion_id, p.role, p.primary_style, p.sub_style,
+           p.perks[1:4] || list_sort(p.perks[5:6]) AS perks,
+           count(*) AS games,
+           sum(CASE WHEN p.win THEN 1 ELSE 0 END) AS wins
+    FROM participants p
+    JOIN matches m ON m.match_id = p.match_id
+    WHERE list_contains(?, m.patch) AND m.duration_s >= ? AND len(p.perks) = 6
+    GROUP BY ALL
+), ranked AS (
+    SELECT *, row_number() OVER (PARTITION BY champion_id, role ORDER BY games DESC, wins DESC) AS rank
+    FROM pages
+)
+SELECT champion_id, role, primary_style, sub_style, perks, games, wins
+FROM ranked
+WHERE rank = 1 AND games >= ?
+"""
+
+SHARDS_SQL = """
+WITH shards AS (
+    SELECT p.champion_id, p.role, p.stat_perks, count(*) AS games
+    FROM participants p
+    JOIN matches m ON m.match_id = p.match_id
+    WHERE list_contains(?, m.patch) AND m.duration_s >= ? AND len(p.stat_perks) = 3
+    GROUP BY ALL
+), ranked AS (
+    SELECT *, row_number() OVER (PARTITION BY champion_id, role ORDER BY games DESC) AS rank FROM shards
+)
+SELECT champion_id, role, stat_perks FROM ranked WHERE rank = 1
+"""
+
+# Spell-Paar ohne Reihenfolge (Flash auf D oder F ist Geschmack).
+SPELLS_SQL = """
+WITH pairs AS (
+    SELECT p.champion_id, p.role,
+           least(p.summoner1, p.summoner2) AS a, greatest(p.summoner1, p.summoner2) AS b,
+           count(*) AS games,
+           sum(CASE WHEN p.win THEN 1 ELSE 0 END) AS wins
+    FROM participants p
+    JOIN matches m ON m.match_id = p.match_id
+    WHERE list_contains(?, m.patch) AND m.duration_s >= ? AND p.summoner1 IS NOT NULL AND p.summoner2 IS NOT NULL
+    GROUP BY ALL
+), ranked AS (
+    SELECT *, row_number() OVER (PARTITION BY champion_id, role ORDER BY games DESC, wins DESC) AS rank FROM pairs
+)
+SELECT champion_id, role, a, b, games, wins FROM ranked WHERE rank = 1 AND games >= ?
 """
 
 
@@ -89,6 +146,8 @@ def build_export(
         "minMinutes": min_minutes,
         "matchups": {},
         "roles": {},
+        "roleWins": {},
+        "builds": {},
     }
     if not selected:
         return data
@@ -108,8 +167,33 @@ def build_export(
                     record[name] = round(row[index])
         data["matchups"][f"{role}:{a}:{b}"] = record
 
-    for champion_id, role, games in con.execute(ROLE_SQL, [selected, min_duration_s]).fetchall():
+    for champion_id, role, games, wins in con.execute(ROLE_SQL, [selected, min_duration_s]).fetchall():
         data["roles"].setdefault(str(champion_id), {})[role] = int(games)
+        data["roleWins"].setdefault(str(champion_id), {})[role] = int(wins)
+
+    builds: dict[str, dict[str, Any]] = data["builds"]
+    shards = {
+        f"{role}:{champion_id}": [int(x) for x in stat_perks]
+        for champion_id, role, stat_perks in con.execute(SHARDS_SQL, [selected, min_duration_s]).fetchall()
+    }
+    for champion_id, role, primary, sub, perks, games, wins in con.execute(
+        RUNES_SQL, [selected, min_duration_s, min_games]
+    ).fetchall():
+        key = f"{role}:{champion_id}"
+        builds.setdefault(key, {})["runes"] = {
+            "primaryStyle": int(primary),
+            "subStyle": int(sub),
+            "perks": [int(x) for x in perks],
+            "statPerks": shards.get(key, []),
+            "games": int(games),
+            "wins": int(wins),
+        }
+    for champion_id, role, a, b, games, wins in con.execute(SPELLS_SQL, [selected, min_duration_s, min_games]).fetchall():
+        builds.setdefault(f"{role}:{champion_id}", {})["spells"] = {
+            "ids": [int(a), int(b)],
+            "games": int(games),
+            "wins": int(wins),
+        }
 
     return data
 
