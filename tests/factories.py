@@ -154,3 +154,18 @@ def kill(at_s: int, killer: int, victim: int, assists: tuple[int, ...] = ()) -> 
 
 def buy(at_s: int, participant: int, item: int) -> dict:
     return {"type": "ITEM_PURCHASED", "timestamp": at_s * 1000, "participantId": participant, "itemId": item}
+
+
+def skill_ups(participant: int, order: str, *, start_s: int = 60, every_s: int = 90) -> list[dict]:
+    """SKILL_LEVEL_UP-Ereignisse in der gegebenen Reihenfolge, z. B. "QWEQQRQ…"."""
+    slots = {"Q": 1, "W": 2, "E": 3, "R": 4}
+    return [
+        {
+            "type": "SKILL_LEVEL_UP",
+            "timestamp": (start_s + index * every_s) * 1000,
+            "participantId": participant,
+            "skillSlot": slots[letter],
+            "levelUpType": "NORMAL",
+        }
+        for index, letter in enumerate(order)
+    ]

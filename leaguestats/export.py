@@ -13,6 +13,8 @@ Format (gelesen von app/src/analysis/matchups.ts):
   }                             jeweils ab `min_games` Spielen; Kaufminute und Start-Items nur mit Kauf-Daten
   matchupItems["<rolle>:<champion>:<gegner>"] = [[itemId, Spiele, Siege], …]
                                 Items im End-Inventar gegen genau diesen Lane-Gegner (beide Richtungen)
+  builds["<rolle>:<championId>"].skills = {max: "QEW", start: "QWE", games, wins}
+                                häufigste Max-Reihenfolge und die häufigsten drei ersten Punkte (seit Parser v5)
   patchStats["<patch>"] = {     je Patch einzeln (seit Export v3), damit die App nach Patch filtern kann
       matches: Spiele,
       champions: {"<championId>": {<rolle>: [Spiele, Siege]}},
@@ -194,6 +196,36 @@ WITH starts AS (
 SELECT champion_id, role, items, games, wins FROM ranked WHERE rank = 1 AND games >= ?
 """
 
+# Skill-Reihenfolge: häufigste Max-Reihenfolge der Grundfähigkeiten und, getrennt gezählt, die häufigsten
+# ersten drei Punkte (Level 1–3). Nur Spiele mit Skill-Daten (Parser v5).
+SKILLS_SQL = """
+WITH counted AS (
+    SELECT p.champion_id, p.role, p.skill_max,
+           count(*) AS games,
+           sum(CASE WHEN p.win THEN 1 ELSE 0 END) AS wins
+    FROM participants p
+    JOIN matches m ON m.match_id = p.match_id
+    WHERE list_contains(?, m.patch) AND m.duration_s >= ? AND p.skill_max IS NOT NULL
+    GROUP BY ALL
+), ranked AS (
+    SELECT *, row_number() OVER (PARTITION BY champion_id, role ORDER BY games DESC, wins DESC) AS rank FROM counted
+)
+SELECT champion_id, role, skill_max, games, wins FROM ranked WHERE rank = 1 AND games >= ?
+"""
+
+SKILL_START_SQL = """
+WITH counted AS (
+    SELECT p.champion_id, p.role, p.skill_order[1:3] AS start, count(*) AS games
+    FROM participants p
+    JOIN matches m ON m.match_id = p.match_id
+    WHERE list_contains(?, m.patch) AND m.duration_s >= ? AND length(p.skill_order) >= 3
+    GROUP BY ALL
+), ranked AS (
+    SELECT *, row_number() OVER (PARTITION BY champion_id, role ORDER BY games DESC) AS rank FROM counted
+)
+SELECT champion_id, role, start FROM ranked WHERE rank = 1
+"""
+
 # Wie viele Items je Champion und Rolle bzw. je Matchup exportiert werden (Komponenten, Tränke und
 # Kontrollwards stehen mit drin; die App filtert mit den Item-Daten aus Data Dragon).
 TOP_ITEMS = 20
@@ -349,6 +381,17 @@ def build_export(
         MATCHUP_ITEMS_SQL, [*params, min_games, TOP_MATCHUP_ITEMS]
     ).fetchall():
         data["matchupItems"].setdefault(f"{role}:{champion_id}:{enemy_id}", []).append([int(item_id), int(games), int(wins)])
+
+    starts = {
+        f"{role}:{champion_id}": start
+        for champion_id, role, start in con.execute(SKILL_START_SQL, params).fetchall()
+    }
+    for champion_id, role, maxed, games, wins in con.execute(SKILLS_SQL, [*params, min_games]).fetchall():
+        key = f"{role}:{champion_id}"
+        skills = {"max": maxed, "games": int(games), "wins": int(wins)}
+        if key in starts:
+            skills["start"] = starts[key]
+        builds.setdefault(key, {})["skills"] = skills
 
     patch_stats: dict[str, dict[str, Any]] = data["patchStats"]
     for patch in selected:

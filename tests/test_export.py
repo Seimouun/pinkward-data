@@ -104,6 +104,22 @@ def test_counts_boots_in_the_role_slot_of_bot_laners(store):
     assert any(entry[0] == 3006 for entry in build_export(store, min_games=2)["matchupItems"]["bottom:4:9"])
 
 
+def test_exports_the_most_common_skill_order(store):
+    from factories import skill_ups
+
+    # Garen (participantId 1) maxt zweimal Q > E > W und einmal E > Q > W; Start immer Q, E, W
+    orders = ["QEWQQRQEQEREEWWRWW", "QEWQQRQEQEREEWWRWW", "QEWEERE"]
+    for index, order in enumerate(orders):
+        save(
+            store,
+            make_match(f"K{index}", blue=(GAREN, 2, 3, 4, 5), red=(DARIUS, 7, 8, 9, 10), blue_wins=index != 1),
+            make_full_timeline(events=skill_ups(1, order)),
+        )
+    skills = build_export(store, min_games=2)["builds"]["top:86"]["skills"]
+    assert skills == {"max": "QEW", "games": 2, "wins": 1, "start": "QEW"}
+    assert "skills" not in build_export(store, min_games=3)["builds"].get("top:86", {})
+
+
 def test_items_work_without_purchase_data(store):
     garen_vs_darius(store, [(True, True), (True, False)])
     build = build_export(store, min_games=2)["builds"]["top:86"]

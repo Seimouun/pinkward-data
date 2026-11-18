@@ -17,8 +17,8 @@ from datetime import datetime, timezone
 from typing import Any, Mapping, NamedTuple
 
 # 2: Loadout, Leistungswerte, Schnappschüsse, Ereignisse. 3: Rang/LP je Spieler, Kayns Form.
-# 4: Item-Käufe aus der Timeline (Start-Items, Reihenfolge).
-PARSER_VERSION = 4
+# 4: Item-Käufe aus der Timeline (Start-Items, Reihenfolge). 5: Skill-Reihenfolge je Spieler.
+PARSER_VERSION = 5
 
 ROLES = ("top", "jungle", "middle", "bottom", "utility")
 MIN_DURATION_S = 300
@@ -108,6 +108,10 @@ PARTICIPANT_COLUMNS: dict[str, str] = {
     "league_points": "INTEGER",
     # Kayn: 0 = Grundform, 1 = Rhaast, 2 = Schattenassassine; sonst 0.
     "champion_form": "INTEGER",
+    # Aus der Timeline (SKILL_LEVEL_UP): Fähigkeiten in der Reihenfolge des Skillens, z. B. "QEWQQRQEQE…",
+    # und daraus die Max-Reihenfolge der drei Grundfähigkeiten, z. B. "QEW". Ohne Timeline NULL.
+    "skill_order": "VARCHAR",
+    "skill_max": "VARCHAR",
     **{
         name: ("DOUBLE" if path.startswith("challenges.") else "INTEGER")
         for name, path in PARTICIPANT_STATS.items()
@@ -217,6 +221,12 @@ def parse_match(
         ]
         parsed.kills, parsed.objective_events = _events(match_id, frames, seats)
         parsed.item_purchases = _item_purchases(match_id, frames, seats)
+        orders = _skill_orders(frames, seats)
+        for row in participant_rows:
+            order = orders.get((row["team_id"], row["role"]))
+            if order:
+                row["skill_order"] = order
+                row["skill_max"] = skill_max(order)
     return parsed
 
 
@@ -258,6 +268,8 @@ def _participant_row(match_id: str, p: dict, gold_15: dict, ladder: Mapping[str,
         "ladder_tier": rank.tier if rank else None,
         "league_points": rank.league_points if rank else None,
         "champion_form": p.get("championTransform"),
+        "skill_order": None,
+        "skill_max": None,
     }
     for name, path in PARTICIPANT_STATS.items():
         row[name] = number_at(p, path)
@@ -400,3 +412,37 @@ def _team_rows(match_id: str, teams: list[dict]):
                     {"match_id": match_id, "team_id": team_id, "pick_turn": ban.get("pickTurn"), "champion_id": champion_id}
                 )
     return objectives, bans
+
+
+SKILL_SLOTS = {1: "Q", 2: "W", 3: "E", 4: "R"}
+
+
+def _skill_orders(frames: list[dict], seats: dict[int, tuple[int, str]]) -> dict[tuple[int, str], str]:
+    """Skill-Punkte je Spieler in zeitlicher Reihenfolge als Buchstaben. Nur normale Level-ups; Entwicklungen
+    (Kha'Zix, Kai'Sa: levelUpType EVOLVE) zählen nicht."""
+    orders: dict[int, list[str]] = {pid: [] for pid in seats}
+    for frame in frames:
+        for event in frame.get("events") or []:
+            if event.get("type") != "SKILL_LEVEL_UP" or event.get("levelUpType", "NORMAL") != "NORMAL":
+                continue
+            pid = int(event.get("participantId") or 0)
+            letter = SKILL_SLOTS.get(int(event.get("skillSlot") or 0))
+            if pid in orders and letter:
+                orders[pid].append(letter)
+    return {seats[pid]: "".join(letters) for pid, letters in orders.items() if letters}
+
+
+def skill_max(order: str) -> str | None:
+    """Max-Reihenfolge der Grundfähigkeiten: zuerst, wer als Erstes 5 Punkte hat; endet das Spiel vorher, zählen
+    mehr Punkte, bei Gleichstand der frühere letzte Punkt. Z. B. "QWEQQRQEQ…" → "QEW"."""
+    stats = {}
+    for letter in "QWE":
+        positions = [index for index, skill in enumerate(order) if skill == letter]
+        if not positions:
+            stats[letter] = (1, 0, len(order))
+            continue
+        fifth = positions[4] if len(positions) >= 5 else None
+        stats[letter] = (0, fifth, 0) if fifth is not None else (1, -len(positions), positions[-1])
+    if all(rank[0] == 1 and rank[1] == 0 for rank in stats.values()):
+        return None
+    return "".join(sorted("QWE", key=lambda letter: stats[letter]))

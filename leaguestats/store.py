@@ -188,9 +188,15 @@ def _v5(con: duckdb.DuckDBPyConnection) -> None:
     con.execute(FILL_PLATFORM)
 
 
+def _v6(con: duckdb.DuckDBPyConnection) -> None:
+    """Skill-Reihenfolge je Spieler aus der Timeline (Parser v5)."""
+    for column in ("skill_order", "skill_max"):
+        con.execute(f"ALTER TABLE participants ADD COLUMN IF NOT EXISTS {column} VARCHAR")
+
+
 # Reihenfolge ist verbindlich; neue Migrationen nur hinten anhängen, bestehende nie ändern.
 # Migrationen müssen additiv bleiben (siehe Store.restore).
-MIGRATIONS: list[Callable[[duckdb.DuckDBPyConnection], None]] = [_v1, _v2, _v3, _v4, _v5]
+MIGRATIONS: list[Callable[[duckdb.DuckDBPyConnection], None]] = [_v1, _v2, _v3, _v4, _v5, _v6]
 SCHEMA_VERSION = len(MIGRATIONS)
 
 

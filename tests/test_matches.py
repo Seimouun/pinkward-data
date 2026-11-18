@@ -156,3 +156,35 @@ def test_records_item_purchases_in_order_without_undone_ones():
     assert [r["item_id"] for r in rows if r["team_id"] == 200] == [1054]
     assert parse_match(make_match()).item_purchases == []
 
+
+
+def test_stores_skill_order_and_max_order_from_the_timeline():
+    from factories import make_full_timeline, make_match, skill_ups
+
+    events = skill_ups(1, "QWEQQRQEQEREEWWRWW") + skill_ups(6, "EQWEERE")
+    # Entwicklungen (Kha'Zix, Kai'Sa) zählen nicht als Skill-Punkt
+    events.append({"type": "SKILL_LEVEL_UP", "timestamp": 900_000, "participantId": 1, "skillSlot": 4, "levelUpType": "EVOLVE"})
+    parsed = parse_match(make_match("S1"), make_full_timeline(events=events))
+    rows = {(p["team_id"], p["role"]): p for p in parsed.participants}
+    assert rows[(100, "top")]["skill_order"] == "QWEQQRQEQEREEWWRWW"
+    assert rows[(100, "top")]["skill_max"] == "QEW"
+    # kurzes Spiel: niemand hat 5 Punkte, E hat die meisten
+    assert rows[(200, "top")]["skill_max"] == "EQW"
+    assert rows[(100, "jungle")]["skill_order"] is None
+
+
+def test_skill_max_breaks_ties_by_the_earlier_point():
+    from leaguestats.matches import skill_max
+
+    assert skill_max("QWE") == "QWE"
+    assert skill_max("WQE") == "WQE"
+    assert skill_max("QEWEQ") == "EQW"  # E hat den zweiten Punkt vor Q
+    assert skill_max("R") is None
+    assert skill_max("") is None
+
+
+def test_skill_columns_are_null_without_timeline():
+    from factories import make_match
+
+    parsed = parse_match(make_match("S2"))
+    assert all(p["skill_order"] is None and p["skill_max"] is None for p in parsed.participants)
