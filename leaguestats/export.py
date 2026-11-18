@@ -13,6 +13,12 @@ Format (gelesen von app/src/analysis/matchups.ts):
   }                             jeweils ab `min_games` Spielen; Kaufminute und Start-Items nur mit Kauf-Daten
   matchupItems["<rolle>:<champion>:<gegner>"] = [[itemId, Spiele, Siege], …]
                                 Items im End-Inventar gegen genau diesen Lane-Gegner (beide Richtungen)
+  patchStats["<patch>"] = {     je Patch einzeln (seit Export v3), damit die App nach Patch filtern kann
+      matches: Spiele,
+      champions: {"<championId>": {<rolle>: [Spiele, Siege]}},
+      bans: {"<championId>": Spiele, in denen er gebannt wurde},
+      duos: {"<botId>:<supportId>": [Spiele, Siege]}   Bot-Lane-Duos ab `DUO_MIN_GAMES` Spielen je Patch
+  }
 
 Die Lane-Differenzen stammen aus den Timeline-Schnappschüssen und erscheinen nur, wenn mindestens
 `min_games` Spiele des Matchups eine Timeline haben.
@@ -108,12 +114,19 @@ WITH shards AS (
 SELECT champion_id, role, stat_perks FROM ranked WHERE rank = 1
 """
 
-# Items im End-Inventar (ohne Trinket-Slot), je Spiel jedes Item einmal; dazu die mittlere Minute des
-# ersten Kaufs, soweit Kauf-Daten da sind (ab Parser v4). Daraus sortiert die App die Kaufreihenfolge.
-ITEMS_SQL = """
+# Items im End-Inventar ohne Trinket-Slot. Bei Bot-Lanern stehen die Stiefel seit der Rollen-Quest nicht im
+# Inventar, sondern im eigenen Slot `roleBoundItem`; bei den anderen Rollen steht dort nur ein Quest-Platzhalter
+# (z. B. 1206), darum zählt der Slot nur für `bottom`.
+INVENTORY = """list_distinct(list_filter(
+    p.items[1:6] || CASE WHEN p.role = 'bottom' THEN [p.role_bound_item] ELSE []::INTEGER[] END,
+    x -> x > 0))"""
+
+# Je Spiel jedes Item einmal; dazu die mittlere Minute des ersten Kaufs, soweit Kauf-Daten da sind (ab
+# Parser v4). Daraus sortiert die App die Kaufreihenfolge.
+ITEMS_SQL = f"""
 WITH inventory AS (
     SELECT p.match_id, p.team_id, p.role, p.champion_id, p.win,
-           unnest(list_distinct(list_filter(p.items[1:6], x -> x > 0))) AS item_id
+           unnest({INVENTORY}) AS item_id
     FROM participants p
     JOIN matches m ON m.match_id = p.match_id
     WHERE list_contains(?, m.patch) AND m.duration_s >= ?
@@ -136,9 +149,9 @@ SELECT champion_id, role, item_id, games, wins, minute FROM ranked WHERE rank <=
 """
 
 # Dasselbe gegen einen bestimmten Lane-Gegner, nur für Paare mit genug Spielen.
-MATCHUP_ITEMS_SQL = """
+MATCHUP_ITEMS_SQL = f"""
 WITH pairs AS (
-    SELECT a.match_id, a.team_id, a.role, a.champion_id, b.champion_id AS enemy_id, a.win, a.items
+    SELECT a.match_id, a.team_id, a.role, a.champion_id, b.champion_id AS enemy_id, a.win, a.items, a.role_bound_item
     FROM participants a
     JOIN participants b ON a.match_id = b.match_id AND a.role = b.role AND a.team_id <> b.team_id
     JOIN matches m ON m.match_id = a.match_id
@@ -147,7 +160,7 @@ WITH pairs AS (
     SELECT role, champion_id, enemy_id FROM pairs GROUP BY ALL HAVING count(*) >= ?
 ), inventory AS (
     SELECT p.role, p.champion_id, p.enemy_id, p.win,
-           unnest(list_distinct(list_filter(p.items[1:6], x -> x > 0))) AS item_id
+           unnest({INVENTORY}) AS item_id
     FROM pairs p
     JOIN enough USING (role, champion_id, enemy_id)
 ), counted AS (
@@ -204,6 +217,45 @@ SELECT champion_id, role, a, b, games, wins FROM ranked WHERE rank = 1 AND games
 """
 
 
+# Je Patch getrennt: Spiele und Siege je Champion und Rolle, Bans und Bot-Lane-Duos.
+PATCH_MATCHES_SQL = """
+SELECT patch, count(*) FROM matches WHERE list_contains(?, patch) AND duration_s >= ? GROUP BY 1
+"""
+
+PATCH_ROLES_SQL = """
+SELECT m.patch, p.champion_id, p.role, count(*), sum(CASE WHEN p.win THEN 1 ELSE 0 END)
+FROM participants p
+JOIN matches m ON m.match_id = p.match_id
+WHERE list_contains(?, m.patch) AND m.duration_s >= ?
+GROUP BY ALL
+ORDER BY 1, 2, 3
+"""
+
+# Spiele, in denen der Champion gebannt war (zählt einmal, auch wenn beide Teams ihn bannen).
+BANS_SQL = """
+SELECT m.patch, b.champion_id, count(DISTINCT b.match_id)
+FROM bans b
+JOIN matches m ON m.match_id = b.match_id
+WHERE list_contains(?, m.patch) AND m.duration_s >= ? AND b.champion_id > 0
+GROUP BY ALL
+ORDER BY 1, 2
+"""
+
+DUOS_SQL = """
+SELECT m.patch, a.champion_id, s.champion_id, count(*), sum(CASE WHEN a.win THEN 1 ELSE 0 END)
+FROM participants a
+JOIN participants s ON s.match_id = a.match_id AND s.team_id = a.team_id AND s.role = 'utility'
+JOIN matches m ON m.match_id = a.match_id
+WHERE a.role = 'bottom' AND list_contains(?, m.patch) AND m.duration_s >= ?
+GROUP BY ALL
+HAVING count(*) >= ?
+ORDER BY 1, 2, 3
+"""
+
+# Seltene Duos fallen je Patch weg, damit die Datei klein bleibt; die App verlangt ohnehin mehr Spiele.
+DUO_MIN_GAMES = 3
+
+
 def latest_patches(store: Store, count: int) -> list[str]:
     rows = store.con.execute("SELECT DISTINCT patch FROM matches").fetchall()
     return sorted((row[0] for row in rows), key=version_key, reverse=True)[:count]
@@ -231,6 +283,7 @@ def build_export(
         "roleWins": {},
         "builds": {},
         "matchupItems": {},
+        "patchStats": {},
     }
     if not selected:
         return data
@@ -296,6 +349,18 @@ def build_export(
         MATCHUP_ITEMS_SQL, [*params, min_games, TOP_MATCHUP_ITEMS]
     ).fetchall():
         data["matchupItems"].setdefault(f"{role}:{champion_id}:{enemy_id}", []).append([int(item_id), int(games), int(wins)])
+
+    patch_stats: dict[str, dict[str, Any]] = data["patchStats"]
+    for patch in selected:
+        patch_stats[patch] = {"matches": 0, "champions": {}, "bans": {}, "duos": {}}
+    for patch, matches in con.execute(PATCH_MATCHES_SQL, params).fetchall():
+        patch_stats[patch]["matches"] = int(matches)
+    for patch, champion_id, role, games, wins in con.execute(PATCH_ROLES_SQL, params).fetchall():
+        patch_stats[patch]["champions"].setdefault(str(champion_id), {})[role] = [int(games), int(wins)]
+    for patch, champion_id, banned in con.execute(BANS_SQL, params).fetchall():
+        patch_stats[patch]["bans"][str(champion_id)] = int(banned)
+    for patch, bottom, support, games, wins in con.execute(DUOS_SQL, [*params, DUO_MIN_GAMES]).fetchall():
+        patch_stats[patch]["duos"][f"{bottom}:{support}"] = [int(games), int(wins)]
 
     return data
 

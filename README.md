@@ -45,11 +45,19 @@ Platzbedarf: etwa 2,5 KB je Match als Parquet; bei drei behaltenen Patches (rund
       "starters": { "ids": [1055, 2003], "games": 640, "wins": 330 }
     }
   },
-  "matchupItems": { "top:86:122": [[3071, 60, 33], [3047, 55, 30]] }
+  "matchupItems": { "top:86:122": [[3071, 60, 33], [3047, 55, 30]] },
+  "patchStats": {
+    "16.23": {
+      "matches": 9800,
+      "champions": { "86": { "top": [410, 212] } },
+      "bans": { "86": 120 },
+      "duos": { "22:412": [95, 51] }
+    }
+  }
 }
 ```
 
-Spiele unter 15 Minuten (Remakes, AFK, vorzeitige Aufgabe) zählen im Export nicht mit; gespeichert bleiben sie. Schlüssel `rolle:a:b` mit Champion-ID `a < b`; Siege und Differenzen aus Sicht von `a`. Die Lane-Differenzen erscheinen nur, wenn genug Spiele des Matchups eine Timeline haben. `builds` enthält je Champion und Rolle die häufigste Runenseite (Nebenrunen sortiert, Werte-Runen getrennt gezählt) und das häufigste Spell-Paar (ohne Reihenfolge), jeweils ab `minGames` Spielen. `items` sind die häufigsten Items im End-Inventar als `[itemId, Spiele, Siege, Kaufminute]`; die mittlere Minute des ersten Kaufs und die Start-Items (`starters`, alles aus den ersten 90 Sekunden) gibt es nur für Matches mit Kauf-Daten (ab Parser-Version 4). `matchupItems` zeigt dasselbe gegen einen bestimmten Lane-Gegner (`rolle:champion:gegner`, beide Richtungen).
+Spiele unter 15 Minuten (Remakes, AFK, vorzeitige Aufgabe) zählen im Export nicht mit; gespeichert bleiben sie. Schlüssel `rolle:a:b` mit Champion-ID `a < b`; Siege und Differenzen aus Sicht von `a`. Die Lane-Differenzen erscheinen nur, wenn genug Spiele des Matchups eine Timeline haben. `builds` enthält je Champion und Rolle die häufigste Runenseite (Nebenrunen sortiert, Werte-Runen getrennt gezählt) und das häufigste Spell-Paar (ohne Reihenfolge), jeweils ab `minGames` Spielen. `items` sind die häufigsten Items im End-Inventar als `[itemId, Spiele, Siege, Kaufminute]`; die mittlere Minute des ersten Kaufs und die Start-Items (`starters`, alles aus den ersten 90 Sekunden) gibt es nur für Matches mit Kauf-Daten (ab Parser-Version 4). `matchupItems` zeigt dasselbe gegen einen bestimmten Lane-Gegner (`rolle:champion:gegner`, beide Richtungen). `patchStats` (seit Export v3) hat dieselben Patches noch einmal einzeln, damit die App nach Patch filtern kann: Spiele und Siege je Champion und Rolle, Bans (Spiele, in denen der Champion gebannt war) und Bot-Lane-Duos (Bot und Support im selben Team, je Patch ab 3 Spielen).
 
 ## Einrichten
 

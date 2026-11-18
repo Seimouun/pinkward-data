@@ -49,6 +49,8 @@ def make_match(
                     },
                     **{f"item{i}": 3000 + i for i in range(6)},
                     "item6": 3340,
+                    # Bot-Laner: Stiefel im eigenen Slot (Rollen-Quest), sonst ein Quest-Platzhalter
+                    "roleBoundItem": 3006 if position == "BOTTOM" else 1220,
                     "champLevel": 16,
                     "kills": 5,
                     "deaths": 3,

@@ -93,6 +93,17 @@ def test_exports_items_with_first_buy_minute_and_starters(store):
     assert "top:86:122" not in build_export(store, min_games=3)["matchupItems"]
 
 
+def test_counts_boots_in_the_role_slot_of_bot_laners(store):
+    # make_match: Bot-Laner haben 3006 im roleBoundItem-Slot, alle anderen den Platzhalter 1220
+    garen_vs_darius(store, [(True, True), (True, False)])
+    builds = build_export(store, min_games=2)["builds"]
+    bottom = {entry[0]: entry for entry in builds["bottom:4"]["items"]}
+    assert bottom[3006][1:3] == [2, 1]
+    top = {entry[0] for entry in builds["top:86"]["items"]}
+    assert 1220 not in top and 3006 not in top
+    assert any(entry[0] == 3006 for entry in build_export(store, min_games=2)["matchupItems"]["bottom:4:9"])
+
+
 def test_items_work_without_purchase_data(store):
     garen_vs_darius(store, [(True, True), (True, False)])
     build = build_export(store, min_games=2)["builds"]["top:86"]
@@ -152,9 +163,38 @@ def test_ignores_games_shorter_than_15_minutes(store):
     assert build_export(store, min_games=1, min_minutes=5)["matches"] == 2
 
 
+def test_exports_stats_per_patch(store):
+    garen_vs_darius(store, [(True, True), (False, False)], version="16.21.1.1", prefix="old")
+    garen_vs_darius(store, [(True, False)] * 3, version="16.22.1.1", prefix="new")
+    stats = build_export(store, patches=2, min_games=1)["patchStats"]
+    assert set(stats) == {"16.22", "16.21"}
+    assert stats["16.21"]["matches"] == 2
+    assert stats["16.21"]["champions"]["86"] == {"top": [2, 1]}
+    assert stats["16.22"]["champions"]["86"] == {"top": [3, 0]}
+    assert stats["16.22"]["champions"]["122"] == {"top": [3, 3]}
+
+
+def test_counts_bans_once_per_game(store):
+    # make_match: Blau bannt 157 (dazu ein leerer Ban -1), Rot 238
+    garen_vs_darius(store, [(True, True)] * 2)
+    bans = build_export(store, min_games=1)["patchStats"]["16.22"]["bans"]
+    assert bans == {"157": 2, "238": 2}
+
+
+def test_exports_bot_lane_duos_per_patch(store):
+    # Blau: Bot 4 + Support 5, Rot: Bot 9 + Support 10
+    garen_vs_darius(store, [(True, True), (True, False), (True, True)])
+    duos = build_export(store, min_games=1)["patchStats"]["16.22"]["duos"]
+    assert duos["4:5"] == [3, 2]
+    assert duos["9:10"] == [3, 1]
+    garen_vs_darius(store, [(True, True)], prefix="X")
+    assert len(build_export(store, min_games=1)["patchStats"]["16.22"]["duos"]) == 2
+
+
 def test_empty_database_exports_empty_tables(store):
     data = build_export(store)
     assert data["patches"] == [] and data["matchups"] == {} and data["matches"] == 0
+    assert data["patchStats"] == {}
 
 
 def test_written_file_is_valid_json(store, tmp_path):
