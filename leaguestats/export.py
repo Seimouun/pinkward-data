@@ -14,6 +14,8 @@ Format (gelesen von app/src/analysis/matchups.ts):
   matchupItems["<rolle>:<champion>:<gegner>"] = [[itemId, Spiele, Siege], …]
                                 Items im End-Inventar gegen genau diesen Lane-Gegner (beide Richtungen)
   builds["<rolle>:<championId>"].skills = {max: "QEW", start: "QWE", games, wins}
+  builds["<rolle>:<championId>"].variants = [{name: "AP" | "AD", games, wins, runes, spells, items, …}, …]
+                                nur bei Champions mit zwei Spielweisen (nach Anteil magischen Schadens)
                                 häufigste Max-Reihenfolge und die häufigsten drei ersten Punkte (seit Parser v5)
   patchStats["<patch>"] = {     je Patch einzeln (seit Export v3), damit die App nach Patch filtern kann
       matches: Spiele,
@@ -339,59 +341,19 @@ def build_export(
         data["roles"].setdefault(str(champion_id), {})[role] = int(games)
         data["roleWins"].setdefault(str(champion_id), {})[role] = int(wins)
 
-    builds: dict[str, dict[str, Any]] = data["builds"]
-    shards = {
-        f"{role}:{champion_id}": [int(x) for x in stat_perks]
-        for champion_id, role, stat_perks in con.execute(SHARDS_SQL, [selected, min_duration_s]).fetchall()
-    }
-    for champion_id, role, primary, sub, perks, games, wins in con.execute(
-        RUNES_SQL, [selected, min_duration_s, min_games]
-    ).fetchall():
-        key = f"{role}:{champion_id}"
-        builds.setdefault(key, {})["runes"] = {
-            "primaryStyle": int(primary),
-            "subStyle": int(sub),
-            "perks": [int(x) for x in perks],
-            "statPerks": shards.get(key, []),
-            "games": int(games),
-            "wins": int(wins),
-        }
-    for champion_id, role, a, b, games, wins in con.execute(SPELLS_SQL, [selected, min_duration_s, min_games]).fetchall():
-        builds.setdefault(f"{role}:{champion_id}", {})["spells"] = {
-            "ids": [int(a), int(b)],
-            "games": int(games),
-            "wins": int(wins),
-        }
-
     params = [selected, min_duration_s]
-    for champion_id, role, item_id, games, wins, minute in con.execute(ITEMS_SQL, [*params, TOP_ITEMS]).fetchall():
-        if data["roles"].get(str(champion_id), {}).get(role, 0) < min_games:
-            continue
-        entry = [int(item_id), int(games), int(wins)]
-        if minute is not None:
-            entry.append(round(minute, 1))
-        builds.setdefault(f"{role}:{champion_id}", {}).setdefault("items", []).append(entry)
-    for champion_id, role, items, games, wins in con.execute(STARTERS_SQL, [*params, min_games]).fetchall():
-        builds.setdefault(f"{role}:{champion_id}", {})["starters"] = {
-            "ids": [int(x) for x in items],
-            "games": int(games),
-            "wins": int(wins),
-        }
+    role_games = {
+        (int(champion_id), role): games
+        for champion_id, by_role in data["roles"].items()
+        for role, games in by_role.items()
+    }
+    data["builds"] = _builds(con, "participants", params, min_games, role_games)
     for role, champion_id, enemy_id, item_id, games, wins in con.execute(
         MATCHUP_ITEMS_SQL, [*params, min_games, TOP_MATCHUP_ITEMS]
     ).fetchall():
         data["matchupItems"].setdefault(f"{role}:{champion_id}:{enemy_id}", []).append([int(item_id), int(games), int(wins)])
 
-    starts = {
-        f"{role}:{champion_id}": start
-        for champion_id, role, start in con.execute(SKILL_START_SQL, params).fetchall()
-    }
-    for champion_id, role, maxed, games, wins in con.execute(SKILLS_SQL, [*params, min_games]).fetchall():
-        key = f"{role}:{champion_id}"
-        skills = {"max": maxed, "games": int(games), "wins": int(wins)}
-        if key in starts:
-            skills["start"] = starts[key]
-        builds.setdefault(key, {})["skills"] = skills
+    _add_variants(con, data["builds"], params, min_games)
 
     patch_stats: dict[str, dict[str, Any]] = data["patchStats"]
     for patch in selected:
@@ -406,6 +368,173 @@ def build_export(
         patch_stats[patch]["duos"][f"{bottom}:{support}"] = [int(games), int(wins)]
 
     return data
+
+
+def _source(sql: str, table: str) -> str:
+    """Dieselbe Abfrage auf einer anderen Teilnehmer-Tabelle (für Build-Varianten)."""
+    return sql.replace("participants p", f"{table} p")
+
+
+def _builds(con, table: str, params: list, min_games: int, role_games: dict[tuple[int, str], int]) -> dict[str, dict[str, Any]]:
+    """Runen, Spells, Items, Start-Items und Skills je `rolle:champion` aus `table`."""
+    builds: dict[str, dict[str, Any]] = {}
+    shards = {
+        f"{role}:{champion_id}": [int(x) for x in stat_perks]
+        for champion_id, role, stat_perks in con.execute(_source(SHARDS_SQL, table), params).fetchall()
+    }
+    for champion_id, role, primary, sub, perks, games, wins in con.execute(
+        _source(RUNES_SQL, table), [*params, min_games]
+    ).fetchall():
+        key = f"{role}:{champion_id}"
+        builds.setdefault(key, {})["runes"] = {
+            "primaryStyle": int(primary),
+            "subStyle": int(sub),
+            "perks": [int(x) for x in perks],
+            "statPerks": shards.get(key, []),
+            "games": int(games),
+            "wins": int(wins),
+        }
+    for champion_id, role, a, b, games, wins in con.execute(_source(SPELLS_SQL, table), [*params, min_games]).fetchall():
+        builds.setdefault(f"{role}:{champion_id}", {})["spells"] = {
+            "ids": [int(a), int(b)],
+            "games": int(games),
+            "wins": int(wins),
+        }
+    for champion_id, role, item_id, games, wins, minute in con.execute(
+        _source(ITEMS_SQL, table), [*params, TOP_ITEMS]
+    ).fetchall():
+        if role_games.get((int(champion_id), role), 0) < min_games:
+            continue
+        entry = [int(item_id), int(games), int(wins)]
+        if minute is not None:
+            entry.append(round(minute, 1))
+        builds.setdefault(f"{role}:{champion_id}", {}).setdefault("items", []).append(entry)
+    for champion_id, role, items, games, wins in con.execute(_source(STARTERS_SQL, table), [*params, min_games]).fetchall():
+        builds.setdefault(f"{role}:{champion_id}", {})["starters"] = {
+            "ids": [int(x) for x in items],
+            "games": int(games),
+            "wins": int(wins),
+        }
+    starts = {
+        f"{role}:{champion_id}": start
+        for champion_id, role, start in con.execute(_source(SKILL_START_SQL, table), params).fetchall()
+    }
+    for champion_id, role, maxed, games, wins in con.execute(_source(SKILLS_SQL, table), [*params, min_games]).fetchall():
+        key = f"{role}:{champion_id}"
+        skills = {"max": maxed, "games": int(games), "wins": int(wins)}
+        if key in starts:
+            skills["start"] = starts[key]
+        builds.setdefault(key, {})["skills"] = skills
+    return builds
+
+
+# Build-Varianten: Manche Champions werden auf zwei Arten gespielt (Katarina AD mit Conqueror oder AP mit
+# Electrocute). Getrennt wird je Champion und Rolle nach dem Anteil magischen Schadens an Champions: Zerfallen
+# die Spiele in zwei deutlich getrennte Gruppen, bekommt jede ihren eigenen Build.
+DAMAGE_SHARES_SQL = """
+SELECT p.champion_id, p.role,
+       list(p.magic_to_champions / (p.physical_to_champions + p.magic_to_champions + p.true_to_champions))
+FROM participants p
+JOIN matches m ON m.match_id = p.match_id
+WHERE list_contains(?, m.patch) AND m.duration_s >= ?
+  AND p.physical_to_champions + p.magic_to_champions + p.true_to_champions > 0
+GROUP BY ALL
+"""
+
+VARIANTS_TABLE_SQL = """
+CREATE OR REPLACE TEMP TABLE build_variants AS
+SELECT p.match_id, p.team_id, p.role,
+       p.champion_id * 10 + CASE WHEN p.magic_to_champions
+            / (p.physical_to_champions + p.magic_to_champions + p.true_to_champions) >= s.threshold THEN 2 ELSE 1 END
+           AS champion_id
+FROM participants p
+JOIN matches m ON m.match_id = p.match_id
+JOIN variant_splits s ON s.champion_id = p.champion_id AND s.role = p.role
+WHERE list_contains(?, m.patch) AND m.duration_s >= ?
+  AND p.physical_to_champions + p.magic_to_champions + p.true_to_champions > 0
+"""
+
+# Code der Variante in der letzten Stelle der Champion-ID (×10): 1 = weniger, 2 = mehr magischer Schaden.
+VARIANT_NAMES = {1: "AD", 2: "AP"}
+# Ab diesem Abstand der Gruppen-Mittel (Anteil magischer Schaden) gilt ein Champion als zweigeteilt.
+VARIANT_MIN_GAP = 0.3
+# Die kleinere Gruppe braucht mindestens diesen Anteil der Spiele (und min_games).
+VARIANT_MIN_SHARE = 0.12
+
+
+def split_threshold(shares: list[float], min_games: int) -> float | None:
+    """Grenze zwischen zwei Gruppen (beste Zweiteilung nach kleinster Streuung innerhalb), oder None, wenn
+    die Spiele nicht deutlich in zwei Spielweisen zerfallen."""
+    values = sorted(shares)
+    n = len(values)
+    if n < 2 * min_games:
+        return None
+    prefix = [0.0]
+    prefix_sq = [0.0]
+    for value in values:
+        prefix.append(prefix[-1] + value)
+        prefix_sq.append(prefix_sq[-1] + value * value)
+
+    def spread(i: int, j: int) -> float:
+        count = j - i
+        total = prefix[j] - prefix[i]
+        return (prefix_sq[j] - prefix_sq[i]) - total * total / count
+
+    smallest = max(min_games, int(n * VARIANT_MIN_SHARE))
+    best: tuple[float, int] | None = None
+    for cut in range(smallest, n - smallest + 1):
+        cost = spread(0, cut) + spread(cut, n)
+        if best is None or cost < best[0]:
+            best = (cost, cut)
+    if best is None:
+        return None
+    cut = best[1]
+    low = (prefix[cut] - prefix[0]) / cut
+    high = (prefix[n] - prefix[cut]) / (n - cut)
+    if high - low < VARIANT_MIN_GAP:
+        return None
+    return (values[cut - 1] + values[cut]) / 2
+
+
+def _add_variants(con, builds: dict[str, dict[str, Any]], params: list, min_games: int) -> None:
+    """Hängt bei zweigeteilten Champions `variants` an den Build: je Spielweise Name, Spiele, Siege und ein
+    eigener Build (gleiches Format), häufigste Variante zuerst."""
+    splits = []
+    for champion_id, role, shares in con.execute(DAMAGE_SHARES_SQL, params).fetchall():
+        threshold = split_threshold([float(x) for x in shares if x is not None], min_games)
+        if threshold is not None:
+            splits.append((int(champion_id), role, threshold))
+    if not splits:
+        return
+    con.execute("CREATE OR REPLACE TEMP TABLE variant_splits (champion_id INTEGER, role VARCHAR, threshold DOUBLE)")
+    con.executemany("INSERT INTO variant_splits VALUES (?, ?, ?)", splits)
+    con.execute(VARIANTS_TABLE_SQL, params)
+    con.execute(
+        """
+        CREATE OR REPLACE TEMP VIEW variant_participants AS
+        SELECT p.* REPLACE (v.champion_id AS champion_id)
+        FROM participants p
+        JOIN build_variants v USING (match_id, team_id, role)
+        """
+    )
+    totals = con.execute(
+        """
+        SELECT p.champion_id, p.role, count(*), sum(CASE WHEN p.win THEN 1 ELSE 0 END)
+        FROM variant_participants p GROUP BY ALL
+        """
+    ).fetchall()
+    role_games = {(int(champion_id), role): int(games) for champion_id, role, games, _ in totals}
+    variant_builds = _builds(con, "variant_participants", params, min_games, role_games)
+    for champion_id, role, games, wins in sorted(totals, key=lambda row: -row[2]):
+        if games < min_games:
+            continue
+        base, code = divmod(int(champion_id), 10)
+        variant = {"name": VARIANT_NAMES[code], "games": int(games), "wins": int(wins)}
+        variant.update(variant_builds.get(f"{role}:{champion_id}", {}))
+        builds.setdefault(f"{role}:{base}", {}).setdefault("variants", []).append(variant)
+    for build in builds.values():
+        if len(build.get("variants", [])) < 2:
+            build.pop("variants", None)
 
 
 def write_export(data: dict[str, Any], path: Path) -> None:

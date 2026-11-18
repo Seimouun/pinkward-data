@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 from factories import buy, make_full_timeline, make_match, make_timeline
 
-from leaguestats.export import build_export, latest_patches, write_export
+from leaguestats.export import build_export, latest_patches, split_threshold, write_export
 from leaguestats.matches import parse_match
 
 GAREN, DARIUS = 86, 122
@@ -118,6 +118,41 @@ def test_exports_the_most_common_skill_order(store):
     skills = build_export(store, min_games=2)["builds"]["top:86"]["skills"]
     assert skills == {"max": "QEW", "games": 2, "wins": 1, "start": "QEW"}
     assert "skills" not in build_export(store, min_games=3)["builds"].get("top:86", {})
+
+
+def test_splits_only_clearly_separate_play_styles():
+    # Katarina: AD-Spiele um 45 % magischen Schaden, AP-Spiele um 88 %
+    shares = [0.42, 0.45, 0.48] * 10 + [0.85, 0.88, 0.9] * 10
+    threshold = split_threshold(shares, min_games=5)
+    assert threshold is not None and 0.48 < threshold < 0.85
+    # reiner Magier: alles zwischen 80 und 95 %, keine zwei Gruppen
+    assert split_threshold([0.8, 0.85, 0.9, 0.95] * 20, min_games=5) is None
+    # zu wenige Spiele in der kleineren Gruppe
+    assert split_threshold([0.4] * 40 + [0.9] * 3, min_games=5) is None
+
+
+def test_exports_build_variants_per_play_style(store):
+    # Garen (participantId 1) einmal mit physischem, einmal mit magischem Schaden; die AP-Spiele gewinnen
+    for index in range(6):
+        ap = index >= 3
+        match = make_match(f"V{index}", blue=(GAREN, 2, 3, 4, 5), red=(DARIUS, 7, 8, 9, 10), blue_wins=ap)
+        garen = match["info"]["participants"][0]
+        garen.update(
+            physicalDamageDealtToChampions=2000 if ap else 18000,
+            magicDamageDealtToChampions=18000 if ap else 2000,
+            trueDamageDealtToChampions=0,
+        )
+        for other in match["info"]["participants"][1:]:
+            other.update(physicalDamageDealtToChampions=10000, magicDamageDealtToChampions=10000, trueDamageDealtToChampions=0)
+        save(store, match)
+    build = build_export(store, min_games=3)["builds"]["top:86"]
+    variants = {variant["name"]: variant for variant in build["variants"]}
+    assert set(variants) == {"AD", "AP"}
+    assert variants["AP"]["games"] == 3 and variants["AP"]["wins"] == 3
+    assert variants["AD"]["wins"] == 0
+    assert variants["AP"]["spells"]["games"] == 3
+    # Darius spielt immer gleich: keine Varianten
+    assert "variants" not in build_export(store, min_games=3)["builds"]["top:122"]
 
 
 def test_items_work_without_purchase_data(store):
