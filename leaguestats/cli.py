@@ -6,13 +6,13 @@ import argparse
 import time
 from pathlib import Path
 
-from .config import DEFAULT_DB, DEFAULT_EXPORT, load_settings
-from .crawl import crawl, parse_tiers
+from .config import DEFAULT_DB, DEFAULT_EXPORT, PLATFORM_TO_REGION, load_settings, parse_platforms
+from .crawl import CrawlResult, crawl_platforms, parse_tiers
 from .export import DEFAULT_MIN_MINUTES, build_export, write_export
-from .riot_api import RiotApi, RiotApiError
+from .riot_api import RiotApi
 from .store import Store
 
-# Engpass ist das App-Limit des Development/Personal Keys: 100 Anfragen pro 2 Minuten.
+# Engpass ist das App-Limit des Development/Personal Keys: 100 Anfragen pro 2 Minuten (je Region).
 REQUESTS_PER_SECOND = 100 / 120
 
 
@@ -24,7 +24,14 @@ def main(argv: list[str] | None = None) -> int:
     commands = parser.add_subparsers(dest="command", required=True)
 
     crawl_cmd = commands.add_parser("crawl", help="Ranked-Matches von Spielern aus der Rangliste laden")
-    crawl_cmd.add_argument("--matches", type=int, default=1000, help="neue Matches, die geladen werden (Standard: 1000)")
+    crawl_cmd.add_argument(
+        "--matches", type=int, default=1000, help="neue Matches je Server, die geladen werden (Standard: 1000)"
+    )
+    crawl_cmd.add_argument(
+        "--platforms",
+        default=None,
+        help="Server, kommagetrennt, je Region einer, z. B. euw1,na1 (Standard: RIOT_PLATFORM, sonst euw1)",
+    )
     crawl_cmd.add_argument("--days", type=int, default=14, help="nur Matches der letzten N Tage (Standard: 14)")
     crawl_cmd.add_argument(
         "--tiers",
@@ -112,17 +119,22 @@ def run_restore(args: argparse.Namespace) -> int:
 def run_crawl(args: argparse.Namespace) -> int:
     try:
         tiers = parse_tiers(args.tiers)
+        platforms = parse_platforms(args.platforms) if args.platforms else None
     except ValueError as err:
         print(err)
         return 2
     settings = load_settings()
-    api = RiotApi(settings.api_key, settings.platform, settings.region)
+    platforms = platforms or settings.platforms
+    apis = {p: RiotApi(settings.api_key, p, PLATFORM_TO_REGION[p]) for p in platforms}
 
     per_match = 2 if args.timelines else 1
     minutes = args.matches * per_match * 1.1 / REQUESTS_PER_SECOND / 60
     if args.max_minutes is not None:
         minutes = min(minutes, args.max_minutes)
-    print(f"Server {settings.platform}: lade bis zu {args.matches} Matches, höchstens etwa {minutes:.0f} Minuten.")
+    print(
+        f"Server {', '.join(platforms)}: lade bis zu {args.matches} Matches je Server, "
+        f"höchstens etwa {minutes:.0f} Minuten."
+    )
     deadline = None if args.max_minutes is None else time.monotonic() + args.max_minutes * 60
     print("Abbrechen mit Strg+C ist jederzeit möglich; bereits geladene Matches bleiben gespeichert.")
 
@@ -134,10 +146,10 @@ def run_crawl(args: argparse.Namespace) -> int:
             export_to_app(store, DEFAULT_EXPORT)
 
     exit_code = 0
-    result = None
+    results: dict[str, CrawlResult | BaseException] = {}
     try:
-        result = crawl(
-            api,
+        results = crawl_platforms(
+            apis,
             store,
             tiers=tiers,
             max_matches=args.matches,
@@ -149,17 +161,18 @@ def run_crawl(args: argparse.Namespace) -> int:
     except KeyboardInterrupt:
         print("\nAbgebrochen. Bisher geladene Matches sind gespeichert.")
         exit_code = 130
-    except RiotApiError as err:
-        print(f"\n{err}")
-        exit_code = 1
 
     try:
-        if result is not None:
-            print(
-                f"Fertig: {result.saved} neue Matches, {result.skipped} übersprungen "
-                f"(Remakes u. Ä.), {result.players_visited} von {result.players} Spielern abgefragt, "
-                f"{api.requests} API-Anfragen."
-            )
+        for platform, result in results.items():
+            if isinstance(result, CrawlResult):
+                print(
+                    f"[{platform}] Fertig: {result.saved} neue Matches, {result.skipped} übersprungen "
+                    f"(Remakes u. Ä.), {result.players_visited} von {result.players} Spielern abgefragt, "
+                    f"{apis[platform].requests} API-Anfragen."
+                )
+            else:
+                print(f"[{platform}] {result}")
+                exit_code = exit_code or 1
         if auto_export:
             export_to_app(store, DEFAULT_EXPORT)
     finally:
@@ -170,7 +183,8 @@ def run_crawl(args: argparse.Namespace) -> int:
 def export_to_app(
     store: Store, out: Path, *, patches: int = 2, min_games: int = 20, min_minutes: int = DEFAULT_MIN_MINUTES
 ) -> bool:
-    data = build_export(store, patches=patches, min_games=min_games, min_minutes=min_minutes)
+    with store.lock:
+        data = build_export(store, patches=patches, min_games=min_games, min_minutes=min_minutes)
     if not data["patches"]:
         print("Keine Matches in der Datenbank. Erst  python -m leaguestats crawl  ausführen.")
         return False
@@ -210,6 +224,7 @@ def run_status(args: argparse.Namespace) -> int:
     store = Store(args.db)
     try:
         summary = store.patch_summary()
+        platforms = store.platform_summary()
         skipped = store.skipped_count()
     finally:
         store.close()
@@ -217,5 +232,7 @@ def run_status(args: argparse.Namespace) -> int:
         print("Datenbank ist leer.")
     for patch, matches, with_timeline in summary:
         print(f"Patch {patch}: {matches} Matches ({with_timeline} mit Gold bei Minute 15)")
+    if platforms:
+        print("Server: " + ", ".join(f"{platform} {count}" for platform, count in platforms))
     print(f"Übersprungen: {skipped}")
     return 0

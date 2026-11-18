@@ -3,7 +3,7 @@ import random
 import pytest
 from factories import make_match
 
-from leaguestats.crawl import crawl, parse_tiers, seed_players
+from leaguestats.crawl import crawl, crawl_platforms, parse_tiers, seed_players
 
 
 class FakeApi:
@@ -112,3 +112,46 @@ def test_parse_tiers_validates_input():
     assert parse_tiers("master, Diamond") == ["MASTER", "DIAMOND"]
     with pytest.raises(ValueError):
         parse_tiers("legende")
+
+
+class PrefixedApi(FakeApi):
+    """Wie FakeApi, aber mit Match-IDs eines Servers (z. B. NA1_A)."""
+
+    def __init__(self, prefix, fail=False):
+        super().__init__()
+        self.prefix = prefix
+        self.fail = fail
+        self.matches = {f"{prefix}_{key}": make_match(f"{prefix}_{key}") for key in ("A", "B", "C")}
+
+    def match_ids(self, puuid, *, start_time=None, count=20):
+        if self.fail:
+            raise RuntimeError("Key abgelehnt")
+        return [f"{self.prefix}_{key}" for key in {"p1": ["A", "B"], "p2": ["C"]}.get(puuid, [])]
+
+
+def test_crawls_several_platforms_in_parallel(store):
+    seen = []
+    results = crawl_platforms(
+        {"euw1": PrefixedApi("EUW1"), "na1": PrefixedApi("NA1")},
+        store,
+        tiers=["CHALLENGER"],
+        max_matches=100,
+        log=lambda _: None,
+        on_saved=seen.append,
+    )
+    assert {p: r.saved for p, r in results.items()} == {"euw1": 3, "na1": 3}
+    assert sorted(seen) == [1, 2, 3, 4, 5, 6]
+    rows = store.con.execute("SELECT split_part(match_id, '_', 1), count(*) FROM matches GROUP BY 1 ORDER BY 1")
+    assert rows.fetchall() == [("EUW1", 3), ("NA1", 3)]
+
+
+def test_one_failing_platform_does_not_stop_the_others(store):
+    results = crawl_platforms(
+        {"euw1": PrefixedApi("EUW1"), "na1": PrefixedApi("NA1", fail=True)},
+        store,
+        tiers=["CHALLENGER"],
+        max_matches=100,
+        log=lambda _: None,
+    )
+    assert results["euw1"].saved == 3
+    assert isinstance(results["na1"], RuntimeError)

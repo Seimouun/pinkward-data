@@ -8,6 +8,7 @@ bleiben erhalten, neue Spalten sind bei alten Matches NULL.
 from __future__ import annotations
 
 import json
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -178,9 +179,18 @@ def _v4(con: duckdb.DuckDBPyConnection) -> None:
     )
 
 
+# Server aus der Match-ID ("EUW1_123" → "EUW1"), falls `platform` fehlt.
+FILL_PLATFORM = "UPDATE matches SET platform = upper(split_part(match_id, '_', 1)) WHERE platform IS NULL"
+
+
+def _v5(con: duckdb.DuckDBPyConnection) -> None:
+    """Server je Match: alte Matches ohne `platform` bekommen ihn aus der Match-ID."""
+    con.execute(FILL_PLATFORM)
+
+
 # Reihenfolge ist verbindlich; neue Migrationen nur hinten anhängen, bestehende nie ändern.
 # Migrationen müssen additiv bleiben (siehe Store.restore).
-MIGRATIONS: list[Callable[[duckdb.DuckDBPyConnection], None]] = [_v1, _v2, _v3, _v4]
+MIGRATIONS: list[Callable[[duckdb.DuckDBPyConnection], None]] = [_v1, _v2, _v3, _v4, _v5]
 SCHEMA_VERSION = len(MIGRATIONS)
 
 
@@ -189,6 +199,8 @@ class Store:
         if str(path) != ":memory:":
             Path(path).parent.mkdir(parents=True, exist_ok=True)
         self.con = duckdb.connect(str(path))
+        # Mehrere Server crawlen in eigenen Threads; die Verbindung darf nur einer zur Zeit benutzen.
+        self.lock = threading.RLock()
         self._types: dict[str, dict[str, str]] = {}
         self._migrate()
 
@@ -224,14 +236,21 @@ class Store:
     # --- Schreiben ----------------------------------------------------------------------------
 
     def known_match_ids(self) -> set[str]:
-        rows = self.con.execute(
-            "SELECT match_id FROM matches UNION ALL SELECT match_id FROM skipped_matches"
-        ).fetchall()
+        with self.lock:
+            rows = self.con.execute(
+                "SELECT match_id FROM matches UNION ALL SELECT match_id FROM skipped_matches"
+            ).fetchall()
         return {row[0] for row in rows}
 
     def save(self, parsed: ParsedMatch) -> bool:
         """Speichert ein Match mit allen Teiltabellen; False, wenn es schon da war."""
         match_id = parsed.match["match_id"]
+        if not parsed.match.get("platform") and "_" in match_id:
+            parsed.match["platform"] = match_id.split("_", 1)[0].upper()
+        with self.lock:
+            return self._save(parsed, match_id)
+
+    def _save(self, parsed: ParsedMatch, match_id: str) -> bool:
         exists = self.con.execute("SELECT count(*) FROM matches WHERE match_id = ?", [match_id]).fetchone()[0]
         if exists:
             return False
@@ -247,10 +266,11 @@ class Store:
         return True
 
     def save_skipped(self, match_id: str, reason: str) -> None:
-        self.con.execute(
-            "INSERT OR IGNORE INTO skipped_matches (match_id, reason, skipped_at) VALUES (?, ?, current_timestamp)",
-            [match_id, reason],
-        )
+        with self.lock:
+            self.con.execute(
+                "INSERT OR IGNORE INTO skipped_matches (match_id, reason, skipped_at) VALUES (?, ?, current_timestamp)",
+                [match_id, reason],
+            )
 
     def _insert(self, table: str, rows: list[dict[str, Any]]) -> None:
         if not rows:
@@ -296,6 +316,12 @@ class Store:
             "SELECT patch, count(*), count(*) FILTER (WHERE has_timeline) FROM matches GROUP BY patch"
         ).fetchall()
         return sorted(rows, key=lambda row: version_key(row[0]), reverse=True)
+
+    def platform_summary(self) -> list[tuple[str, int]]:
+        """Matches je Server (z. B. EUW1, NA1), häufigster zuerst."""
+        return self.con.execute(
+            "SELECT coalesce(platform, '?'), count(*) FROM matches GROUP BY 1 ORDER BY 2 DESC"
+        ).fetchall()
 
     def skipped_count(self) -> int:
         return self.con.execute("SELECT count(*) FROM skipped_matches").fetchone()[0]
@@ -356,6 +382,7 @@ class Store:
                 path = source / f"{table}.parquet"
                 if path.exists():
                     self.con.execute(f"INSERT INTO {table} BY NAME SELECT * FROM read_parquet('{path.as_posix()}')")
+            self.con.execute(FILL_PLATFORM)
         return self.con.execute("SELECT count(*) FROM matches").fetchone()[0]
 
 

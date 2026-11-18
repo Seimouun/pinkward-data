@@ -114,3 +114,20 @@ def test_prune_removes_all_rows_of_old_patches(store):
     for table in ("participants", "participant_frames", "kills", "team_objectives", "bans"):
         leftover = store.con.execute(f"SELECT count(*) FROM {table} WHERE match_id = 'OLD'").fetchone()[0]
         assert leftover == 0, table
+
+
+def test_fills_the_platform_from_the_match_id(store, tmp_path):
+    match = make_match("NA1_42")
+    match["info"].pop("platformId")
+    assert store.save(parse_match(match, None))
+    assert store.con.execute("SELECT platform FROM matches").fetchone()[0] == "NA1"
+
+    # Snapshots aus der Zeit ohne Server-Spalte bekommen ihn beim Wiederherstellen.
+    store.con.execute("UPDATE matches SET platform = NULL")
+    store.snapshot(tmp_path)
+    restored = Store(":memory:")
+    try:
+        restored.restore(tmp_path)
+        assert restored.con.execute("SELECT platform FROM matches").fetchone()[0] == "NA1"
+    finally:
+        restored.close()

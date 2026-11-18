@@ -36,8 +36,34 @@ PLATFORM_TO_REGION = {
 @dataclass(frozen=True)
 class Settings:
     api_key: str
-    platform: str
-    region: str
+    # Ein oder mehrere Server, z. B. ("euw1", "na1"); jeder crawlt mit eigenem Rate-Limit seiner Region.
+    platforms: tuple[str, ...]
+
+    @property
+    def platform(self) -> str:
+        return self.platforms[0]
+
+    @property
+    def region(self) -> str:
+        return PLATFORM_TO_REGION[self.platform]
+
+
+def parse_platforms(value: str) -> tuple[str, ...]:
+    """`"euw1, NA1"` → `("euw1", "na1")`. Server, die sich eine Region teilen (euw1 und eun1), lehnen wir ab:
+    Riot zählt die Match-Anfragen je Region, beide zusammen wären nicht schneller, sondern stritten ums Limit."""
+    platforms = tuple(dict.fromkeys(p.strip().lower() for p in value.split(",") if p.strip()))
+    unknown = [p for p in platforms if p not in PLATFORM_TO_REGION]
+    if unknown or not platforms:
+        allowed = ", ".join(sorted(PLATFORM_TO_REGION))
+        raise ValueError(f"Unbekannter Server {', '.join(unknown) or '(leer)'}. Erlaubt: {allowed}")
+    regions = [PLATFORM_TO_REGION[p] for p in platforms]
+    shared = sorted({r for r in regions if regions.count(r) > 1})
+    if shared:
+        raise ValueError(
+            f"Mehrere Server in derselben Region ({', '.join(shared)}) teilen sich das Rate-Limit; "
+            "je Region nur einen Server angeben (z. B. euw1,na1)."
+        )
+    return platforms
 
 
 def read_env_file(path: Path) -> dict[str, str]:
@@ -65,8 +91,8 @@ def load_settings(env_file: Path = PIPELINE_DIR / ".env") -> Settings:
         raise SystemExit(
             "RIOT_API_KEY fehlt. Kopiere pipeline/.env.example nach pipeline/.env und trag deinen Key ein."
         )
-    platform = (get("RIOT_PLATFORM", "euw1") or "euw1").lower()
-    if platform not in PLATFORM_TO_REGION:
-        allowed = ", ".join(sorted(PLATFORM_TO_REGION))
-        raise SystemExit(f"Unbekannter Server {platform!r}. Erlaubt: {allowed}")
-    return Settings(api_key=api_key, platform=platform, region=PLATFORM_TO_REGION[platform])
+    try:
+        platforms = parse_platforms(get("RIOT_PLATFORM", "euw1") or "euw1")
+    except ValueError as err:
+        raise SystemExit(str(err)) from err
+    return Settings(api_key=api_key, platforms=platforms)

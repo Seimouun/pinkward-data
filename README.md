@@ -13,7 +13,7 @@ Bewusst breit, damit spätere Auswertungen nicht an fehlenden Daten scheitern, a
 
 | Tabelle | Inhalt |
 |---|---|
-| `matches` | Patch, Server, Dauer, Startzeit, Aufgabe/Surrender, Tier, in dem das Match gefunden wurde, Parser-Version |
+| `matches` | Patch, Server (`platform`, z. B. `EUW1`, `NA1`; fehlt er, kommt er aus der Match-ID), Dauer, Startzeit, Aufgabe/Surrender, Tier, in dem das Match gefunden wurde, Parser-Version |
 | `participants` | Champion (bei Kayn mit Form), Rolle, Sieg; Rollenvergabe (Wunschrolle/Autofill); Tier und LP aus der Rangliste (leer bei Master mit wenig LP oder darunter); Summoner Spells, Runen, Items; KDA, Gold, CS, Schaden nach Art, Tanken, Heilung/Schilde, CC, Vision, Türme; Riots Lane-Kennzahlen (Gold/XP-Vorsprung in der Lane-Phase, max. CS- und Level-Vorsprung, Solo-Kills, Platings, CS nach 10 Minuten) |
 | `participant_frames` | Gold, XP, Level, CS, Schaden ausgeteilt/erhalten zu Minute 5, 10, 15, 20, 25, 30 |
 | `kills` | alle Kills der ersten 20 Minuten: Zeit, Killer, Opfer, Assists (je Team und Rolle), Position, Bounty |
@@ -54,7 +54,9 @@ Spiele unter 15 Minuten (Remakes, AFK, vorzeitige Aufgabe) zählen im Export nic
 ## Einrichten
 
 1. Unter *Settings → Secrets and variables → Actions* das Secret `RIOT_API_KEY` anlegen (Key von <https://developer.riotgames.com>).
-2. Optional die Variable `RIOT_PLATFORM` setzen (Standard `euw1`).
+2. Optional die Variable `RIOT_PLATFORM` setzen (Standard `euw1`). Mehrere Server kommagetrennt, z. B. `euw1,na1`:
+   Sie crawlen parallel, jeder mit dem Rate-Limit seiner Region. Je Region nur ein Server, denn EUW und EUNE teilen
+   sich `europe` und damit das Limit.
 3. Unter *Actions* den Workflow „Matches sammeln“ einmal von Hand starten. Danach läuft er alle drei Stunden.
 
 Ein Development Key läuft nach 24 Stunden ab; für den Dauerbetrieb braucht es einen Personal API Key.
@@ -69,7 +71,9 @@ python -m venv .venv
 .venv\Scripts\python -m pytest
 ```
 
-Weitere Befehle: `status`, `prune --keep-patches 3`, `snapshot ORDNER` (alle Tabellen als Parquet) und `restore ORDNER` (leere Datenbank aus Parquet befüllen; so baut der Workflow seine Arbeitsdatenbank).
+Mehrere Server auf einmal: `crawl --platforms euw1,na1` (überschreibt `RIOT_PLATFORM`); `--matches` gilt je Server.
+
+Weitere Befehle: `status` (auch Matches je Server), `prune --keep-patches 3`, `snapshot ORDNER` (alle Tabellen als Parquet) und `restore ORDNER` (leere Datenbank aus Parquet befüllen; so baut der Workflow seine Arbeitsdatenbank).
 
 Den Key dafür in `.env` eintragen (Vorlage: `.env.example`).
 

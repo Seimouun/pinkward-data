@@ -3,11 +3,16 @@
 Ablauf: Spieler der gewählten Tiers aus League-V4 holen, zufällig mischen, je Spieler die letzten
 Ranked-Solo-Matches abfragen und unbekannte Matches speichern, bis das Ziel erreicht ist.
 PUUIDs bleiben nur im Speicher; die Datenbank enthält keine Spieler.
+
+Mehrere Server (z. B. EUW und NA) laufen mit `crawl_platforms` parallel in eigenen Threads: Riot zählt das
+Rate-Limit je Region, jeder Server hat also sein eigenes Kontingent. Woher ein Match kommt, steht in
+`matches.platform`.
 """
 
 from __future__ import annotations
 
 import random
+import threading
 import time
 from dataclasses import dataclass
 from typing import Callable, Protocol
@@ -131,3 +136,59 @@ def crawl(
             if on_saved:
                 on_saved(result.saved)
     return result
+
+
+def crawl_platforms(
+    apis: dict[str, Api],
+    store: Store,
+    *,
+    log: Callable[[str], None] = print,
+    on_saved: Callable[[int], None] | None = None,
+    should_stop: Callable[[], bool] = lambda: False,
+    **options,
+) -> dict[str, CrawlResult | BaseException]:
+    """Crawlt jeden Server in einem eigenen Thread; `max_matches` gilt je Server.
+
+    `on_saved` bekommt die Summe über alle Server. Bricht ein Server mit einem Fehler ab, laufen die anderen
+    weiter; der Fehler steht dann statt des Ergebnisses im Rückgabewert. Strg+C stoppt alle.
+    """
+    stop = threading.Event()
+    lock = threading.Lock()
+    total = 0
+    results: dict[str, CrawlResult | BaseException] = {}
+
+    def saved_one(_: int) -> None:
+        nonlocal total
+        with lock:
+            total += 1
+            count = total
+        if on_saved:
+            on_saved(count)
+
+    def run(platform: str, api: Api) -> None:
+        try:
+            results[platform] = crawl(
+                api,
+                store,
+                log=lambda message: log(f"[{platform}] {message}"),
+                on_saved=saved_one,
+                should_stop=lambda: stop.is_set() or should_stop(),
+                **options,
+            )
+        except BaseException as err:  # noqa: BLE001 – Fehler eines Servers sollen die anderen nicht stoppen
+            results[platform] = err
+            log(f"[{platform}] abgebrochen: {err}")
+
+    threads = [threading.Thread(target=run, args=item, name=f"crawl-{item[0]}", daemon=True) for item in apis.items()]
+    for thread in threads:
+        thread.start()
+    try:
+        for thread in threads:
+            while thread.is_alive():
+                thread.join(timeout=0.5)
+    except KeyboardInterrupt:
+        stop.set()
+        for thread in threads:
+            thread.join()
+        raise
+    return results
