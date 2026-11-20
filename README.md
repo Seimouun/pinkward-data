@@ -60,6 +60,12 @@ Platzbedarf: etwa 2,5 KB je Match als Parquet; bei drei behaltenen Patches (rund
 
 Spiele unter 15 Minuten (Remakes, AFK, vorzeitige Aufgabe) zählen im Export nicht mit; gespeichert bleiben sie. Schlüssel `rolle:a:b` mit Champion-ID `a < b`; Siege und Differenzen aus Sicht von `a`. Die Lane-Differenzen erscheinen nur, wenn genug Spiele des Matchups eine Timeline haben. `builds` enthält je Champion und Rolle die häufigste Runenseite (Nebenrunen sortiert, Werte-Runen getrennt gezählt) und das häufigste Spell-Paar (ohne Reihenfolge), jeweils ab `minGames` Spielen. `items` sind die häufigsten Items im End-Inventar als `[itemId, Spiele, Siege, Kaufminute]`; die mittlere Minute des ersten Kaufs und die Start-Items (`starters`, alles aus den ersten 90 Sekunden) gibt es nur für Matches mit Kauf-Daten (ab Parser-Version 4). `skills` ist die häufigste Max-Reihenfolge der Grundfähigkeiten (`max`, z. B. `"QEW"`: zuerst wer als Erstes 5 Punkte hat) und die häufigsten drei ersten Punkte (`start`), aus den `SKILL_LEVEL_UP`-Ereignissen der Timeline (ab Parser-Version 5, füllt sich mit neuen Spielen). `matchupItems` zeigt dasselbe gegen einen bestimmten Lane-Gegner (`rolle:champion:gegner`, beide Richtungen). `patchStats` (seit Export v3) hat dieselben Patches noch einmal einzeln, damit die App nach Patch filtern kann: Spiele und Siege je Champion und Rolle, Bans (Spiele, in denen der Champion gebannt war) und Bot-Lane-Duos (Bot und Support im selben Team, je Patch ab 3 Spielen).
 
+## Auf dem eigenen Server
+
+Seit November 2026 crawlt ein Docker-Container auf dem eigenen Server rund um die Uhr und lädt alle 90 Minuten ins
+Release `data` hoch. Einrichtung und Alltag: [deploy/README.md](deploy/README.md). Solange der Server läuft, steht die
+Repo-Variable `CRAWL_ON_GITHUB` auf `false`, und der Workflow unten crawlt nur noch, wenn man ihn von Hand startet.
+
 ## Einrichten
 
 1. Unter *Settings → Secrets and variables → Actions* das Secret `RIOT_API_KEY` anlegen (Key von <https://developer.riotgames.com>).

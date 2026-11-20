@@ -1,0 +1,22 @@
+# Dienste auf dem Server. Starten aus dem Repo-Ordner:
+#   docker compose -f deploy/docker-compose.yml up -d --build
+# Später kommen hier API, Postgres und Caddy (HTTPS für api.pinkward.net) dazu.
+services:
+  crawler:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    env_file: .env
+    volumes:
+      - crawler-data:/data
+    restart: unless-stopped
+    # DuckDB nimmt sich sonst bis zu 80 % des Speichers; der Server hat 2 GB.
+    mem_limit: 1200m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  crawler-data:
